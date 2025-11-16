@@ -1,0 +1,7 @@
+# python相关的忽略
+.idea
+*.iml
+*.png
+*.pdf
+*.xml
+*.txt
