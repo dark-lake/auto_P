@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 from playwright.async_api import async_playwright as ap
+from playwright.async_api import Playwright
 from lxml import etree
 import aiofiles
 from typing import Optional, Dict, Any
@@ -158,6 +159,38 @@ async def get_mail_list_data() -> Optional[str]:
         print(f"XML parse error: {e}")
     return None
 
+# 浏览器自动生成
+# playwright codegen 网址
+async def run(playwright: Playwright) -> None:
+    browser = await playwright.chromium.launch(headless=False)
+    context = await browser.new_context()
+    page = await context.new_page()
+    await page.goto("https://email.163.com/")
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("textbox", name="邮箱账号或手机号码").click()
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("textbox", name="邮箱账号或手机号码").click()
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("textbox", name="邮箱账号或手机号码").fill("15510616055")
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").click()
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").press("CapsLock")
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").fill("F")
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").press("CapsLock")
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").fill("Ft2015871115!")
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("link", name="登  录").click()
+    await page.get_by_role("button", name="收 信").click()
+    await page.get_by_role("link", name="感谢您参加《2025年9月5日中行GBase8aGDCA").click()
+    await page.locator("[id=\"_mail_link_30_614\"]").click()
+    await page.locator("[id=\"_mail_link_40_632\"]").click()
+    async with page.expect_download() as download_info:
+        await page.get_by_role("link", name="下载", exact=True).click()
+    download = await download_info.value
+
+    # ---------------------
+    await context.close()
+    await browser.close()
+
+
+async def main() -> None:
+    async with ap() as playwright:
+        await run(playwright)
 
 if __name__ == '__main__':
     import time
