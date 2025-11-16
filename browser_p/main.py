@@ -44,45 +44,89 @@ def get_sid(cookies: list[dict]) -> Optional[str]:
     return None
 
 
+def is_expiry(file: str, expiry_time: int) -> bool:
+    """
+    判断当前文件上次修改时间已经超过了要求时间,即文件已经过期
+    :param expiry_time: 过期时间 单位是s
+    :param file:
+    :return:
+    """
+    # 时间戳
+    modify_time = os.path.getmtime(file)
+    print(
+        f'上次的修改时间为:{time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(modify_time))}, 当前时间为:{time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())}')
+    # 过期返回true
+    return True if time.time() - modify_time > expiry_time else False
+
+
+def get_cookies_str(cookies: list[Cookie]) -> str | None:
+    # 处理请求参数
+    if not cookies:
+        return None
+    cookies_str = ';'.join(f"{c['name']}={c['value']}" for c in cookies)
+    print(f'Cookies: {cookies_str}')
+    return cookies_str
+
+
+def get_SID(cookies: list[Cookie]) -> str | None:
+    # 处理请求参数
+    if not cookies:
+        return None
+    for c in cookies:
+        if c.get('name') == 'Coremail.sid':
+            sid = c.get('value')
+            print(f'sid: {sid}')
+            return sid
+    print("未获取到邮箱【sid】参数")
+    return None
+
+
+async def do_login(browser: Browser, url: str, email: str, passwd: str, state_path: str) -> BrowserContext:
+    context = await browser.new_context(ignore_https_errors=True)
+    page = await context.new_page()
+    resp = await page.goto(url)
+    print(f'【{await page.title()}】页面响应状态: {resp.status}')
+    frame = page.locator('xpath=//div[@id="urs163Area"]/iframe').content_frame
+    await frame.locator('xpath=//input[@data-loginname="loginEmail"]').fill(email)
+    await frame.locator('xpath=//input[@id="pwdtext"]').fill(passwd)
+
+    async with page.expect_navigation():
+        await frame.locator('xpath=//a[@id="dologin"]').click()
+
+    # 存储state
+    await context.storage_state(path=state_path)
+    print(f'存储最新的状态到:{state_path}')
+    return context
+
+
 async def auto_login():
     url = 'https://email.163.com/'
     email = '15510616055'
     passwd = 'Ft2015871115!'
+    state_path = os.getcwd() + '\\' + 'state.json'
+
     try:
         async with ap() as p:
             browser = await p.chromium.launch(headless=True)
-            state_path = os.getcwd() + '/' + 'state.json'
             # 若本地没有登录状态则新建上下文并存储state,否则加载上下文
-            has_state = os.path.exists(state_path)
-            print(has_state)
-            if not has_state:
-                context = await browser.new_context(ignore_https_errors=True)
-                page = await context.new_page()
-                resp = await page.goto(url)
-                print(f'【{await page.title()}】页面响应状态: {resp.status}')
-                frame = page.locator('xpath=//div[@id="urs163Area"]/iframe').content_frame
-                await frame.locator('xpath=//input[@data-loginname="loginEmail"]').fill(email)
-                await frame.locator('xpath=//input[@id="pwdtext"]').fill(passwd)
-
-                async with page.expect_navigation():
-                    await frame.locator('xpath=//a[@id="dologin"]').click()
-
-                # 存储state
-                await context.storage_state(path=state_path)
-            else:
+            exist_state = os.path.exists(state_path)
+            expiry_state = is_expiry(state_path, 5 * 60)  # 5分钟内
+            print(f'是否存在:{exist_state}')
+            print(f'是否过期:{expiry_state}')
+            if exist_state and not expiry_state:
                 context = await browser.new_context(storage_state=state_path, ignore_https_errors=True)
+            else:
+                context = await do_login(browser, url, email, passwd, state_path)
 
-            # 处理请求参数
             cookies = await context.cookies()
-            cookies_str = generate_cookies_str(cookies)
-            print(f'Cookies: {cookies_str}')
-
-            get_mail_list_url = 'https://mail.163.com/js6/s'
-            sid = get_sid(cookies)
-            if not sid:
-                print("未获取到邮箱【sid】参数")
+            # 获取邮件列表
+            cookies_str = get_cookies_str(cookies)
+            sid = get_SID(cookies)
+            if not cookies_str or not sid:
+                print(f'cookies:{cookies}或sid:{sid}处理异常')
                 return
 
+            get_mail_list_url = 'https://mail.163.com/js6/s'
             xml_data = """<?xml version="1.0"?>
                 <object>
                     <int name="fid">1</int>
@@ -116,10 +160,10 @@ async def goto_url(url: str, params: dict, data: str, headers: dict, cookies: st
                 print(f'Status: {resp.status}')
                 if resp.status == 200:
                     print("获取邮件列表成功")
-                async with aiofiles.open("a.txt", 'w', encoding='utf-8') as f:
-                    await f.write(await resp.text())
-                    await f.flush()
-            mid = await get_mail_list_data()
+                # async with aiofiles.open("a.txt", 'w', encoding='utf-8') as f:
+                #     await f.write(await resp.text())
+                #     await f.flush()
+            mid = get_mail_list_data()
             if not mid:
                 print("未获取到指定邮件ID")
                 return
@@ -144,20 +188,33 @@ async def goto_url(url: str, params: dict, data: str, headers: dict, cookies: st
             print(f"HTTP request error: {e}")
 
 
-async def get_mail_list_data() -> Optional[str]:
+def get_mail_list_data(xml_file: str = 'a.xml') -> Optional[str]:
+    """
+    从 XML 文件中获取第一个 subject 包含 'GBase' 的对象的 id。
+    :param xml_file: XML 文件路径
+    :return: id 字符串或 None
+    """
     try:
-        tree = etree.parse('a.xml')
-        objs = tree.xpath('//result//array/object')
-        for o in objs:
-            subject_elem = o.xpath('string[@name="subject"]')
-            if subject_elem and 'GBase' in subject_elem[0].text:
-                id_elem = o.xpath('string[@name="id"]')
-                if id_elem:
-                    print(f'id: {id_elem[0].text}')
-                    return id_elem[0].text
-    except Exception as e:
-        print(f"XML parse error: {e}")
+        tree = etree.parse(xml_file)
+    except OSError:
+        print(f"文件不存在: {xml_file}")
+        return None
+    except etree.XMLSyntaxError as e:
+        print(f"XML 解析错误: {e}")
+        return None
+
+    objs = tree.xpath('//result//array/object')
+    for o in objs:
+        subject_elem = o.xpath('string[@name="subject"]/text()')
+        if subject_elem and 'GBase' in subject_elem[0]:
+            id_elem = o.xpath('string[@name="id"]/text()')
+            if id_elem:
+                print(f'id: {id_elem[0]}')
+                return id_elem[0]
+
+    print("未找到符合条件的对象")
     return None
+
 
 # 浏览器自动生成
 # playwright codegen 网址
@@ -166,15 +223,25 @@ async def run(playwright: Playwright) -> None:
     context = await browser.new_context()
     page = await context.new_page()
     await page.goto("https://email.163.com/")
-    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("textbox", name="邮箱账号或手机号码").click()
-    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("textbox", name="邮箱账号或手机号码").click()
-    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("textbox", name="邮箱账号或手机号码").fill("15510616055")
-    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").click()
-    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").press("CapsLock")
-    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").fill("F")
-    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").press("CapsLock")
-    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").fill("Ft2015871115!")
-    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("link", name="登  录").click()
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("textbox",
+                                                                                            name="邮箱账号或手机号码").click()
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("textbox",
+                                                                                            name="邮箱账号或手机号码").click()
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("textbox",
+                                                                                            name="邮箱账号或手机号码").fill(
+        "15510616055")
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator(
+        "#auto-id-1763283592991").click()
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").press(
+        "CapsLock")
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").fill(
+        "F")
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").press(
+        "CapsLock")
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.locator("#auto-id-1763283592991").fill(
+        "Ft2015871115!")
+    await page.locator("[id=\"x-URS-iframe1763283592440.6204\"]").content_frame.get_by_role("link",
+                                                                                            name="登  录").click()
     await page.get_by_role("button", name="收 信").click()
     await page.get_by_role("link", name="感谢您参加《2025年9月5日中行GBase8aGDCA").click()
     await page.locator("[id=\"_mail_link_30_614\"]").click()
@@ -190,12 +257,13 @@ async def run(playwright: Playwright) -> None:
 
 async def main() -> None:
     async with ap() as playwright:
-        await run(playwright)
+        print(playwright.chromium.executable_path)
+
 
 if __name__ == '__main__':
-    import time
     st = time.time()
     asyncio.run(auto_login())
+    # print(get_file_modify_time('state.json', 60))
     et = time.time()
-    print(f'总耗时:{str((et-st))[:4]}s')
+    print(f'总耗时:{str((et - st))[:4]}s')
     # asyncio.run(get_mail_list_data())
