@@ -5,3 +5,5 @@
 *.pdf
 *.xml
 *.txt
+*.env
+config.json
