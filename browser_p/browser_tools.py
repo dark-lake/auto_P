@@ -217,6 +217,27 @@ async def close_page(page_name: str) -> str:
     return f'{page.page_name}页面已关闭'
 
 
+@mcp.tool(
+    name="fill_input_element",
+    description="需要先获取所有页面的名称,然后对指定页面的输入框进行输入"
+)
+async def fill_input_element(page_name: str, element_desc: str, value: str) -> str:
+    """
+    针对所有网页中的input输入文本的情况,比如账号,密码等等
+    :param page_name: 页面名称,唯一确定一个页面
+    :param element_desc: 被操作的input元素的名称或者描述,应该是文字类型
+    :param value: 要输入的值
+    :return: 是否输入成功
+    """
+    if not check_status():
+        return f'浏览器未启动,请先启动浏览器'
+
+    browser_context = await browser_context_manager.get_browser_context()
+    page = await browser_context.get_page_by_name(page_name)
+
+    pass
+
+
 def check_status() -> bool:
     """
     检查浏览器上下文管理以及浏览器上下文对象是否存在

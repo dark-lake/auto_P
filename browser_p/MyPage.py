@@ -72,7 +72,7 @@ class MyWebpage:
 
         # 如果打开了新的页面,应该将该页面加入到页面列表中
         popup = None
-        
+
         # 异步显示圆点标记（自动消失，不阻塞点击）
         asyncio.create_task(self._show_click_indicator(relative_position, element_name))
 
@@ -376,10 +376,10 @@ async def add_bk(position: list[int], img_path: str) -> None:
         return
 
     import cv2
-    
+
     # 读取原图
     image = cv2.imread(img_path)
-    
+
     if image is None:
         logger.error(f'无法读取图片: {img_path}')
         return
@@ -388,16 +388,16 @@ async def add_bk(position: list[int], img_path: str) -> None:
     h, w = image.shape[:2]
     center_x = int(position[0] * w / 1000)
     center_y = int(position[1] * h / 1000)
-    
+
     # 圆的半径
     radius = 20
 
     # 创建一个遮罩层用于绘制半透明圆
     overlay = image.copy()
-    
+
     # 绘制实心红色圆 (OpenCV的颜色格式是BGR)
     cv2.circle(overlay, (center_x, center_y), radius, (0, 0, 255), -1)  # -1表示填充
-    
+
     # 混合原图和遮罩层，实现半透明效果
     alpha = 0.6  # 透明度 (0-1，0完全透明，1完全不透明)
     image = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
