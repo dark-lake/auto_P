@@ -23,10 +23,10 @@ logger.add(
     mode='a'
 )
 
-logger.add(
-    sys.stdout,
-    enqueue=True,
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
-)
+# logger.add(
+#     sys.stdout,
+#     enqueue=True,
+#     format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
+# )
 
 __all__ = ["logger"]

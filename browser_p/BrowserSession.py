@@ -1,25 +1,7 @@
 import uuid
 from logger_util import logger
-from playwright.async_api import Browser, Page, Response
-
-
-
-class MyPage:
-    def __init__(self, page_id: str, page_name: str, page: Page) -> None:
-        self.page_id = page_id
-        self.page_name = page_name
-        self.page = page
-
-    async def goto(self, url: str) -> Response:
-        return await self.page.goto(url)
-
-    async def close(self):
-        try:
-            await self.page.close()
-            logger.info(f'{self.page_id}-{self.page_name} 页面已关闭')
-        except Exception as e:
-            logger.exception(f'{self.page_id}-{self.page_name} 页面关闭异常', e)
-
+from playwright.async_api import Browser
+from MyPage import MyWebpage
 
 class BrowserSession:
     """
@@ -29,7 +11,7 @@ class BrowserSession:
     def __init__(self, browser: Browser, browser_id: str):
         self.browser = browser
         self.browser_id = browser_id
-        self.pages: list[MyPage] = []
+        self.pages: dict[str, MyWebpage] = {}
 
     def __enter__(self):
         return self
@@ -49,18 +31,26 @@ class BrowserSession:
         except Exception as e:
             logger.exception(f'浏览器关闭异常', e)
 
-    async def create_page(self, page_name: str) -> MyPage:
+    async def create_page(self, page_name: str) -> MyWebpage:
         """
         创建一个page页面，必须传入当前页面的名字，用于更好的标识这个页面
         :param page_name: 页面名称
         :return:
         """
         page = await self.browser.new_page()
-        my_page = MyPage(str(uuid.uuid4()), page_name, page)
-        self.pages.append(my_page)
+        my_page = MyWebpage(str(uuid.uuid4()), page_name, page)
+        self.pages[my_page.page_id]  = my_page
+        logger.info(f'创建于浏览器会话ID为{self.browser_id}的页面{my_page.page_id}成功')
         return my_page
 
 
+    async def get_page_by_id(self, page_id: str) -> MyWebpage|None:
+        """
+        通过page_id来返回指定的页面对象
+        :param page_id: 页面id
+        :return:
+        """
+        return self.pages.get(page_id, None)
 
 
 

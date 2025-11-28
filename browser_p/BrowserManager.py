@@ -1,8 +1,9 @@
 from BrowserSession import BrowserSession
+from MyPage import MyPage
 from logger_util import logger
 
 
-class BrowserContext:
+class BrowserManager:
     """
     负责管理所有浏览器实例对象
     """
@@ -63,7 +64,7 @@ class BrowserContext:
 
 
 
-browser_context = BrowserContext()
+browser_context = BrowserManager()
 
 if __name__ == '__main__':
-    b = BrowserContext()
+    b = BrowserManager()

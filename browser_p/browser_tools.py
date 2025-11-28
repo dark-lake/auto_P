@@ -1,91 +1,159 @@
+from typing import Any, Coroutine
+
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from openai import AsyncOpenAI
 from playwright.async_api import async_playwright, Browser
 from BrowserSession import BrowserSession
 import asyncio
 from logger_util import logger
 import uuid
-from BrowserContext import browser_context
+from BrowserContextManager import browser_context_manager, MyBrowserContext
+import MyPage
+import json
+
+load_dotenv()
 
 mcp = FastMCP("Chrome_Browser Server")
 
+
 @mcp.tool(
     name="open_browser",
-    description="Open a browser and return a session ID",
+    description="用于启动一个浏览器,通常只需要执行一次该工具",
 )
 async def open_browser() -> str:
     """
-    Open a browser and return a session ID.
+    用于启动一个浏览器,通常只需要执行一次该工具
     """
-    # Start Playwright
-    playwright = await async_playwright().start()
+    if browser_context_manager.browser_contexts:
+        browser_context = await browser_context_manager.get_browser_context()
+        if browser_context:
+            logger.info(f'浏览器上下文已启动成功,无需重复启动,浏览器上下文对象ID为：{browser_context.id}')
+            return f'浏览器上下文已启动成功,无需重复启动'
 
-    # Launch browser
+    playwright = await async_playwright().start()
     browser = await playwright.chromium.launch(headless=False)
-    browser_id = str(uuid.uuid4())
-    browser_session = BrowserSession(browser, browser_id)
-    if not browser_session:
-        logger.info(f'浏览器上下午对象未创建')
+    await browser_context_manager.set_browser(browser)
+    browser_context_obj = await browser_context_manager.add_browser_context()
+    if not browser_context_obj:
+        logger.info(f'浏览器上下文对象未创建')
         return f'浏览器上下文对象未创建，流程终止'
-    logger.info(f'浏览器上下文对象创建成功')
-    await browser_context.add_browser_session(browser_session)
-    logger.info(f'浏览器会话对象创建成功')
-    return f'浏览器会话启动成功,会话id为：{browser_id}'
+    logger.info(f'浏览器上下文对象创建成功-{browser_context_obj.id}')
+    return f'浏览器上下文启动成功'
 
 
 @mcp.tool(
     name="close_browser",
-    description="Close the browser. If browser_session_ids is not passed in, all browsers will be closed by default",
+    description="Close the browser.",
 )
-async def close_browser(browser_id_list: list[str] = []) -> str:
+async def close_browser() -> str:
     """
     关闭浏览器
     """
-    if browser_context:
-        await browser_context.close_browser_session(browser_id_list)
-        return '关闭成功'
+    if browser_context_manager:
+        await browser_context_manager.close_browser()
+        return '浏览器关闭成功'
     else:
-        logger.info(f'浏览器上下文对象为:{browser_context},无法关闭浏览器会话:{browser_id_list}')
-        return '关闭失败'
+        logger.info(f'浏览器关闭失败')
+        return '浏览器关闭失败'
+
+
+# @mcp.tool(
+#     name="do_operation_on_page",
+#     description="对被操作元素执行对应操作, 操作类型只支持:[点击,输入,清空]"
+# )
+async def do_operation(page_name: str, element_desc: str, operation: str, params: dict = None) -> str:
+    """
+    对页面的指定元素执行对应操作
+    :param element_desc: 被操作元素的名称或描述,应该是文字
+    :param page_name: 页面名称
+    :param operation: 对元素执行的操作,分别有[点击,输入,清空]
+    :param params: 此次操作可能需要的参数
+    """
+    if not check_status():
+        return f'浏览器未启动,请先启动浏览器'
+
+    browser_context = await browser_context_manager.get_browser_context()
+    page = await browser_context.get_page_by_name(page_name)
+
+    # 获取元素在页面中的位置信息
+    locator = await page.get_locator(element_desc)
+
+    if operation == '点击':
+        await locator.click()
+        return f'点击元素成功'
+
+    return f'操作元素失败'
 
 
 @mcp.tool(
-    name="get_browser_session_id",
-    description="Get all browser session ID",
+    name="click_element",
+    description="执行点击工具前先获取所有页面的名字,然后再执行点击工具"
 )
-async def get_all_browser_session_id() -> list[str]:
+async def click_element(page_name: str, element_desc: str) -> str:
     """
-    获取所有的浏览器会话ID
-    :return:
+    对页面的指定元素执行点击操作
+    :param element_desc: 被操作元素的名称或描述,应该是文字
+    :param page_name: 浏览器上下文对象ID
     """
-    if not browser_context:
-        logger.info(f'浏览器上下文对象为:{browser_context},无法获取所有浏览器会话ID列表')
-        return []
+    if not check_status():
+        return f'浏览器未启动,请先启动浏览器'
 
-    return await browser_context.get_all_browser_session_id()
+    browser_context = await browser_context_manager.get_browser_context()
+    page = await browser_context.get_page_by_name(page_name)
+    try:
+        click_res = await page.mouse_click(element_desc)
+        if click_res == 'click_ok':
+            return f'已完成{element_desc}元素点击'
+        return click_res
+    except Exception as e:
+        logger.exception(f'点击{element_desc}元素异常', e)
+        return f'点击{element_desc}元素异常'
 
 
 @mcp.tool(
-    name="goto_page",
-    description="Let the browser session access the given url",
+    name="open_page",
+    description="用于打开url所指向的页面,如果已经执行过open_browser操作,那就直接执行该工具即可,无需再次调用open_browser",
 )
-async def goto_page(url: str, browser_session_id: str, page_name: str) -> str:
+async def open_page(url: str, page_name: str) -> str:
     """
-    打开指定页面
-    :param page_name: 页面的名字，用于更好的标识一个页面
-    :param browser_session_id: 浏览器会话ID，用于唯一确定一个浏览器会话
+    用于打开url所指向的页面,如果已经执行过open_browser操作,那就直接执行该工具即可,无需再次调用open_browser
+    :param page_name: 页面的名字，每个页面的名字原则上应不相同,用于更好的标识一个页面
     :param url: 页面url
     :return:
     """
+
+    # 获取浏览器上下文对象,默认只有一个
+    browser_context = await browser_context_manager.get_browser_context()
     if not browser_context:
-        logger.info(f'浏览器上下文对象为:{browser_context},无法获取所有浏览器会话ID列表')
+        logger.info(f'未获取到浏览器上下文对象,流程终止')
+        return f'未获取到浏览器上下文对象'
+    try:
+        return await do_open_page(url, browser_context.id, page_name)
+    except Exception as e:
+        logger.exception(f'访问页面{page_name}-{url}出现异常', e)
+        return f'访问页面{page_name}-{url}出现异常, 异常为: {e}'
+
+
+async def do_open_page(url: str, browser_context_id: str, page_name: str) -> str:
+    """
+    执行访问页面的实际操作
+    :param url: 页面url
+    :param browser_context_id: 浏览器上下文id,用于唯一确定一个浏览器
+    :param page_name: 页面名称
+    :return:
+    """
+
+    if not browser_context_manager:
+        logger.info(f'浏览器上下文对象为:{browser_context_manager},无法获取所有浏览器会话ID列表')
         return f'浏览器上下文对象异常'
 
-    browser_session = await browser_context.get_browser_session_by_id(browser_session_id)
-    if not browser_session:
-        logger.info(f'未获取到browser_session_id为:{browser_session_id}的会话')
-        return f'未获取到browser_session_id为:{browser_session_id}的会话'
+    browser_context = await browser_context_manager.get_browser_context(browser_context_id)
+    if not browser_context:
+        logger.info(f'未获取到浏览器上下文ID为:{browser_context_id}的对象')
+        return f'未获取到浏览器上下文对象, 流程终止'
+    page = await browser_context.create_page(page_name=page_name)
 
-    page = await browser_session.create_page(page_name=page_name)
     try:
         res = await page.goto(url)
         print(f'页面相应状态为：{res.status}')
@@ -96,25 +164,115 @@ async def goto_page(url: str, browser_session_id: str, page_name: str) -> str:
             logger.info(f'{page_name}-{url}页面打开成功：{res.status}')
             return f'{page_name}-{url} 页面打开成功'
     except Exception as e:
-        logger.error(f'{page_name}-{url}页面访问网络异常',e)
+        logger.error(f'{page_name}-{url}页面访问网络异常', e)
         return f'{page_name}-{url}页面打开失败'
 
 
 @mcp.tool(
-    name="get_page",
-    description="Get a page by page id",
+    name="get_all_page_name",
+    description="获取所有页面的名称",
 )
-async def get_page(page_id: str) -> str:
+async def get_all_page_name() -> str:
     """
-    通过page_id获取到对应的页面
-    :param page_id:
+    获取所有页面名称
+    :return: 页面名称列表
+    """
+    if not check_status():
+        return f'浏览器未启动,请先启动浏览器'
+
+    browser_context = await browser_context_manager.get_browser_context()
+    if not browser_context:
+        logger.info(f'未获取到浏览器上下文对象')
+        return f'未获取到浏览器上下文对象'
+
+    return f'所有的页面名称列表为: {str(await browser_context.get_all_page_names())}'
+
+
+@mcp.tool(
+    name="close_page",
+    description="需要先获取所有页面名称，然后判断页面名称是否匹配目标，再关闭页面。",
+)
+async def close_page(page_name: str) -> str:
+    """
+    关闭指定页面名称的页面
+    :param page_name: 页面名称
     :return:
     """
-    pass
+    if not check_status():
+        return f'浏览器未启动,请先启动浏览器'
+
+    browser_context = await browser_context_manager.get_browser_context()
+    if not browser_context:
+        logger.info(f'未获取到浏览器上下文对象')
+        return f'未获取到浏览器上下文对象'
+
+    # 通过page_name获取page_id
+    page = await browser_context.get_page_by_name(page_name)
+    if not page:
+        logger.info(f'未获取到页面对象')
+        return f'未获取到页面对象'
+    # 关闭页面
+    await page.close()
+    logger.info(f'{page.page_name}页面已关闭')
+    return f'{page.page_name}页面已关闭'
+
+
+def check_status() -> bool:
+    """
+    检查浏览器上下文管理以及浏览器上下文对象是否存在
+    :return:
+    """
+    if not browser_context_manager:
+        logger.info(f'浏览器上下文管理器异常:{browser_context_manager}')
+        return False
+    return True
+
+
+async def test():
+    # 构建一个浏览器
+    from playwright.async_api import async_playwright
+    import base64
+
+    a = await async_playwright().start()
+    browser = await a.chromium.launch(
+        headless=False,
+        args=["--start-maximized"]
+    )
+    browser_context = await browser.new_context(no_viewport=True)
+
+    # 访问谷歌页面
+    google_page = await browser_context.new_page()
+    await google_page.goto('https://www.google.com')
+
+    # 构建一个MyPage
+    my_page = MyPage.MyPage(page_id='1', page_name='google', page=google_page, browser_context=browser_context)
+
+    # locator = await my_page.get_locator("登录按钮")
+    #
+    # elements = await locator.all()
+    # print(len(elements))
+    # for element in elements:
+    #     try:
+    #         async with my_page.page.expect_navigation():
+    #             print(element)
+    #             await element.click()
+    #     except:
+    #         pass
+
+    res = await my_page.mouse_click("谷歌搜索的输入框")
+    print(res)
+    await asyncio.sleep(10)
+
 
 
 
 if __name__ == "__main__":
+    # 设置环境变量标识这是 MCP server 模式
+    import os
+
+    os.environ['MCP_SERVER_MODE'] = '1'
+
     # Initialize and run the server
     mcp.run(transport='stdio')
-    # asyncio.run(open_browser())
+
+    # asyncio.run(test())

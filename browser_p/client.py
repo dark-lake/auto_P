@@ -68,12 +68,18 @@ class Agent:
             response = self.openai.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL"),
                 messages=messages,
+                extra_body={
+                    "thinking": {
+                        "type": "disabled"  # 不使用深度思考能力
+                        # "type": "enabled" # 使用深度思考能力
+                    }
+                },
                 tools=tools
             )
             # Process response and handle tool calls
             final_text = []
             message = response.choices[0].message
-            print(f'Message: {message}')
+            logger.info(f'Message: {response}')
             if len(message.content) > 0:
                 final_text.append(message.content)
 
@@ -83,6 +89,13 @@ class Agent:
                     print(f'\t{i}')
                 print('-' * 20)
 
+                # 将工具输出追加到 messages，让模型知道工具结果
+                if hasattr(message, 'reasoning_content') and message.reasoning_content:
+                    messages.append({
+                        "role": "assistant",
+                        "content": message.reasoning_content
+                    })
+
                 for tool_call in message.tool_calls:
                     tool_call_id = tool_call.id
                     tool_name = tool_call.function.name
@@ -90,22 +103,19 @@ class Agent:
                     final_text.append(f"[Calling tool {tool_name} with args {tool_args}]")
                     # 执行工具
                     result = await self.session.call_tool(tool_name, tool_args)
+                    logger.info(f'result:{result}')
                     tool_output = result.structuredContent
-                    print(tool_output)
                     final_text.append(f"[Tool {tool_name} result: {tool_output}]")
 
-                    # 将工具输出追加到 messages，让模型知道工具结果
-                    if hasattr(message, 'reasoning_content') and message.reasoning_content:
-                        messages.append({
-                            "role": "assistant",
-                            "content": message.reasoning_content
-                        })
                     messages.append({
                         "role": "tool",
                         "name": tool_name,
-                        "content": str(tool_output['result']),
+                        "content": str(tool_output),
                         "tool_call_id": tool_call_id
                     })
+
+                for msg in messages:
+                    logger.info(f'Message: {msg}')
                 # 继续下一轮 LLM 推理
                 continue
             else:
@@ -146,6 +156,8 @@ class Agent:
                 query = input("\nQuery: ").strip()
 
                 if query.lower() == 'quit':
+                    # 关闭日志
+                    await logger.complete()
                     break
 
                 response = await self.process_query(query)
