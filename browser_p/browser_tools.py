@@ -235,8 +235,38 @@ async def fill_input_element(page_name: str, element_desc: str, value: str) -> s
     browser_context = await browser_context_manager.get_browser_context()
     page = await browser_context.get_page_by_name(page_name)
 
-    pass
+    # 填充输入框, 先通过键盘输入,如果不成功再改用locator方式输入
+    if await page.fill_input_element_by_keyboard(element_desc, value):
+        logger.info(f'[键盘方式]已输入{element_desc}元素值为:{value}')
+        return f'已输入{element_desc}元素值为:{value}'
+    if await page.fill_input_element_by_locator(element_desc, value):
+        logger.info(f'[locator方式]已输入{element_desc}元素值为:{value}')
+        return f'已输入{element_desc}元素值为:{value}'
 
+    return f'{element_desc}元素填充{value}失败'
+
+
+@mcp.tool(
+    name="press_keyboard",
+    description="需要先获取所有页面的名称,然后执行键盘操作"
+)
+async def press_keyboard(page_name: str, key: str) -> str:
+    """
+    在网页上执行键盘操作,比如回车,空格等操作
+    :param page_name: 页面名称,唯一确定一个页面
+    :param key: 要按压的按键名,必须符合大驼峰格式,比如Enter,Shift等
+    :return: 是否按压成功
+    """
+    if not check_status():
+        return f'浏览器未启动,请先启动浏览器'
+
+    browser_context = await browser_context_manager.get_browser_context()
+    page = await browser_context.get_page_by_name(page_name)
+    if await page.keyboard_press(key):
+        logger.info(f'已按压{key}按键')
+        return f'已按压{key}按键'
+    logger.info(f'按压{key}按键失败')
+    return f'按压{key}按键失败'
 
 def check_status() -> bool:
     """
@@ -283,8 +313,6 @@ async def test():
     res = await my_page.mouse_click("谷歌搜索的输入框")
     print(res)
     await asyncio.sleep(10)
-
-
 
 
 if __name__ == "__main__":

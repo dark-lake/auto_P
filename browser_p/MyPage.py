@@ -20,6 +20,33 @@ load_dotenv()
 
 
 class MyWebpage:
+    key_list: list[str] = [
+        'Enter',
+        'Shift',
+        'Tab',
+        'ArrowUp',
+        'ArrowDown',
+        'ArrowLeft',
+        'ArrowRight',
+        'Backspace',
+        'Delete',
+        'Escape',
+        'F1',
+        'F2',
+        'F3',
+        'F4',
+        'F5',
+        'F6',
+        'F7',
+        'F8',
+        'F9',
+        'F10',
+        'F11',
+        "Meta",
+        "Space",
+        'Alt',
+    ]
+
     def __init__(self, page_id: str, page_name: str, page: Page, my_browser_context: 'MyBrowserContext') -> None:
         self.page_id = page_id
         self.page_name = page_name
@@ -161,7 +188,7 @@ class MyWebpage:
 
     async def get_locator(self, element_name: str) -> Locator | None:
         # 获取当前页面截图的base64数据
-        page_snapshot_base64 = await get_snapshot_base64(self)
+        page_snapshot_base64 = await get_snapshot_base64(self, element_name)
         # 构造提问
         messages = [{
             "role": "user",
@@ -181,26 +208,25 @@ class MyWebpage:
                 },
             ],
         }]
-        # 获取位置信息[x, y, width, height]
-        print(messages)
+        # 获取位置信息[x_min, y_min, x_max, y_max]
         position = await get_element_position_by_model(messages)
         # 获取局部html
         html = await get_html_by_position(self, position)
         logger.info(f'html:{html}')
 
+        # 获取元素xpath
         messages = [
             {
                 "role": "user",
                 "content": (
                     f"{html}\n\n"
-                    "请从以上 局部的HTML 片段中找到名为「{element_name}」的元素，并返回其 XPath。最好使用//开头,因为局部HTML无法确定其父层级的具体情况"
+                    f"请从以上 局部的HTML 片段中找到名为「{element_name}」的元素，并返回其 XPath。最好使用//开头,因为局部HTML无法确定其父层级的具体情况"
                     "只返回 JSON，不要附加任何说明。"
                     "未找到则返回 {{}}：\n\n"
                 )
                 ,
             }
         ]
-        # 获取元素xpath
         xpath = await get_element_xpath_by_model(messages)
         if not xpath:
             return None
@@ -214,6 +240,82 @@ class MyWebpage:
                 logger.info(f'{self.page_id}-{self.page_name} 页面已关闭')
         except Exception as e:
             logger.exception(f'{self.page_id}-{self.page_name} 页面关闭异常', e)
+
+    async def fill_input_element_by_locator(self, element_name: str, value: str) -> bool:
+        """
+        填充输入框,通过locator定位到元素,然后填充该input元素
+        :param element_name: 元素对象名字或描述
+        :param value: 输入的值
+        :return:
+        """
+        locator = await self.get_locator(element_name)
+        if locator:
+            await locator.fill(value)
+            return True
+        else:
+            return False
+
+    async def fill_input_element_by_keyboard(self, element_name: str, value: str) -> bool:
+        """
+        填充输入框,通过模拟键盘输入,更加强大
+        :param element_name: 元素对象名字或描述
+        :param value: 输入的值
+        :return:
+        """
+        if await self.mouse_click(element_name) != 'click_ok':
+            return False
+
+        # 输入的每个字符间隔100ms
+        await self.page.keyboard.type(value, delay=60)
+        # insert_text 不会触发键盘事件,不拟人
+        # await self.page.keyboard.insert_text(value)
+        return True
+
+    async def keyboard_press(self, key: str) -> bool:
+        """
+        模拟键盘按键
+        :param key: 按键名称, 可以用+来构建快键键,比如 Shift+1 即为 !
+        :return:
+        """
+        # 格式化按键名称
+        key = await format_keyboard_key(key)
+        try:
+            await self.page.keyboard.press(key)
+            logger.info(f'{key} 按键已按下')
+            return True
+        except Exception as e:
+            logger.exception(f'{key} 按键按下异常', e)
+            return False
+
+
+async def format_keyboard_key(key: str) -> str:
+    """
+    格式化键盘按键, 使得返回的都是符合playwright要求的格式
+    :param key: 按键名称, 可以用+来构建快键键,比如 Shift+1 即为 !
+    :return: 格式化后的按键名称
+    """
+    # TODO: 修复mac与win上command和win按键名不同问题
+    special_keys = ['arrowup', 'arrowdown', 'arrowleft', 'arrowright']
+    # 处理key的格式
+    if '+' not in key:
+        # 如果开头第一个是字母,就转成大写
+        if key.lower() in special_keys:
+            key = (key[:5]).capitalize() + (key[5:]).capitalize()
+        else:
+            key = key.capitalize()
+    else:
+        key1, key2 = key.split('+')
+        if key1.lower() in special_keys:
+            key1 = (key[:5]).capitalize() + (key[5:]).capitalize()
+        else:
+            key1 = key.capitalize()
+        if key2.lower() in special_keys:
+            key2 = (key[:5]).capitalize() + (key[5:]).capitalize()
+        else:
+            key2 = key.capitalize()
+        key = key1 + '+' + key2
+
+    return key
 
 
 async def snapshot(my_page: MyWebpage, element_name: str) -> bytes:
