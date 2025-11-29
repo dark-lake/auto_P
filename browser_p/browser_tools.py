@@ -1,14 +1,12 @@
+import asyncio
+
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
-from openai import AsyncOpenAI
-from playwright.async_api import async_playwright, Browser
-from BrowserSession import BrowserSession
-import asyncio
-from utils.logger_util import logger
-import uuid
-from BrowserContextManager import browser_context_manager, MyBrowserContext
+from playwright.async_api import async_playwright
+
 import MyPage
-import json
+from BrowserContextManager import browser_context_manager, MyWebpage
+from utils.logger_util import logger
 
 load_dotenv()
 
@@ -86,13 +84,14 @@ async def do_operation(page_name: str, element_desc: str, operation: str, params
 
 @mcp.tool(
     name="click_element",
-    description="执行点击工具前先获取所有页面的名字,然后再执行点击工具"
+    description="执行点击工具前先获取所有页面的名字,然后再执行点击工具, 如果点击2次后依然没有效果,那请将detail赋值为1,通常情况保持0即可"
 )
-async def click_element(page_name: str, element_desc: str) -> str:
+async def click_element(page_name: str, element_desc: str, detail: int = 0) -> str:
     """
     对页面的指定元素执行点击操作
+    :param detail: 点击的精确程度, 默认是0为标准程度, 如果点击2次后依然没有达到要求,可以将detail赋值为1表示高精度点击
     :param element_desc: 被操作元素的名称或描述,应该是文字
-    :param page_name: 浏览器上下文对象ID
+    :param page_name: 如果点击后打开新页面,则返回新页面名字,否则返回空
     """
     if not check_status():
         return f'浏览器未启动,请先启动浏览器'
@@ -102,19 +101,22 @@ async def click_element(page_name: str, element_desc: str) -> str:
     if not page:
         logger.info(f'未获取到{page_name}页面对象')
         return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
-    try:
-        click_res = await page.mouse_click(element_desc)
-        if click_res == 'click_ok':
-            return f'已完成{element_desc}元素点击'
-        return click_res
-    except Exception as e:
-        logger.exception(f'点击{element_desc}元素异常', e)
-        return f'点击{element_desc}元素异常'
+
+    new_page = await page.mouse_click(element_desc, detail)
+    if isinstance(new_page, MyWebpage):
+        logger.info(f'已完成{element_desc}元素点击,精度为{'高' if detail else '标准'}')
+        return f'已完成{element_desc}元素点击,点击后打开的新页面名称为:{new_page.page_name}.采用的点击精度为{'高' if detail else '标准'}'
+    elif isinstance(new_page, str):
+        # 异常信息
+        return new_page
+    else:
+        # 返回None的情况
+        return f'点击{element_desc}元素成功'
 
 
 @mcp.tool(
     name="open_page",
-    description="用于打开url所指向的页面,如果已经执行过open_browser操作,那就直接执行该工具即可,无需再次调用open_browser",
+    description="在打开新页面之前，应先获取所有已打开的页面名称。如果目标页面已存在，则无需重复打开。该工具用于打开指定 URL 对应的页面；如果之前已经执行过 open_browser，则可以直接使用本工具，无需再次调用 open_browser。",
 )
 async def open_page(url: str, page_name: str) -> str:
     """
@@ -125,6 +127,8 @@ async def open_page(url: str, page_name: str) -> str:
     """
 
     # 获取浏览器上下文对象,默认只有一个
+    if not check_status():
+        return f'浏览器未启动,请先启动浏览器'
     browser_context = await browser_context_manager.get_browser_context()
     if not browser_context:
         logger.info(f'未获取到浏览器上下文对象,流程终止')
@@ -259,7 +263,7 @@ async def press_keyboard(page_name: str, key: str) -> str:
     在网页上执行键盘操作,比如回车,空格等操作
     :param page_name: 页面名称,唯一确定一个页面
     :param key: 要按压的按键名,必须符合大驼峰格式,比如Enter,Shift等
-    :return: 是否按压成功
+    :return: 是否按压成功,以及是否打开了新页面
     """
     if not check_status():
         return f'浏览器未启动,请先启动浏览器'
@@ -269,11 +273,38 @@ async def press_keyboard(page_name: str, key: str) -> str:
     if not page:
         logger.info(f'按键{key}时未获取到{page_name}页面对象')
         return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
-    if await page.keyboard_press(key):
+    new_page = await page.keyboard_press(key)
+    if isinstance(new_page, MyWebpage):
+        logger.info(f'已按压{key}按键,新打开的页面名称为:{new_page.page_name}')
+        return f'已按压{key}按键,新打开的页面名称为:{new_page.page_name}'
+    elif isinstance(new_page, str):
+        # 返回错误信息
+        return new_page
+    else:
         logger.info(f'已按压{key}按键')
         return f'已按压{key}按键'
-    logger.info(f'按压{key}按键失败')
-    return f'按压{key}按键失败'
+
+
+@mcp.tool(
+    name="get_page_snapshot",
+    description="获取指定页面的快照,当你想知道当前页面上有什么时,你可以调用该工具!"
+)
+async def get_page_snapshot(page_name: str) -> str:
+    """
+    获取页面快照,当你完成任务的时候遇到问题,你可以通过获取页面的快照来看看这个页面目前是怎么样子,然后再决定该如何解决遇到的问题!
+    :param page_name: 页面名称
+    :return: 截图base64
+    """
+    if not check_status():
+        return f'浏览器未启动,请先启动浏览器'
+    browser_context = await browser_context_manager.get_browser_context()
+    page = await browser_context.get_page_by_name(page_name)
+    if not page:
+        logger.info(f'获取{page_name}页面快照时未获取到页面对象')
+        return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
+    logger.info(f'已获取{page.page_name}页面快照')
+    return f'{await page.get_snapshot_base64('快照')}'
+
 
 def check_status() -> bool:
     """
@@ -289,7 +320,6 @@ def check_status() -> bool:
 async def test():
     # 构建一个浏览器
     from playwright.async_api import async_playwright
-    import base64
 
     a = await async_playwright().start()
     browser = await a.chromium.launch(

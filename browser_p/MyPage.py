@@ -1,12 +1,14 @@
-import base64
 import asyncio
-from typing import TYPE_CHECKING
+import base64
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING, Optional
 
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from playwright.async_api import Page, Response, Locator
+from playwright.async_api import TimeoutError
 from pydantic import BaseModel
-from bs4 import BeautifulSoup
-import uuid
 
 if TYPE_CHECKING:
     from BrowserContextManager import MyBrowserContext
@@ -14,7 +16,6 @@ if TYPE_CHECKING:
 from utils.logger_util import logger
 from utils import os_util
 from openai import AsyncOpenAI
-import json
 import os
 
 load_dotenv()
@@ -60,14 +61,15 @@ class MyWebpage:
     async def get_html(self) -> str:
         return await self.page.content()
 
-    async def mouse_click(self, element_name: str) -> str:
+    async def mouse_click(self, element_name: str, detail: int = 0) -> 'MyWebpage|str|None':
         """
         模拟鼠标点击行为
+        :param detail: 点击精度,1表示high
         :param element_name: 要点击的元素名称或描述
         :return:
         """
         # 获取截图
-        page_snapshot_base64 = await get_snapshot_base64(self, element_name)
+        page_snapshot_base64 = await self.get_snapshot_base64('单击', element_name)
         # 构造提问
         messages = [{
             "role": "user",
@@ -79,7 +81,7 @@ class MyWebpage:
                         # PNG图片："url":  f"data:image/png;base64,{base64_image}"
                         "url": page_snapshot_base64
                     },
-                    "detail": "low",
+                    "detail": "High" if detail == 1 else "Low",
                 },
                 {
                     "type": "text",
@@ -98,9 +100,6 @@ class MyWebpage:
             logger.info(f'相对位置获取失败:{relative_position}')
             return f'未在页面上找到{element_name}'
 
-        # 如果打开了新的页面,应该将该页面加入到页面列表中
-        popup = None
-
         # 异步显示圆点标记（自动消失，不阻塞点击）
         asyncio.create_task(self._show_click_indicator(relative_position, element_name))
 
@@ -109,22 +108,22 @@ class MyWebpage:
                 # 执行点击操作
                 await self.page.mouse.click(relative_position[0], relative_position[1])
                 popup = await popup_info.value
-                logger.info(f'{element_name}点击后,打开了新页面')
+                if popup:
+                    new_page = MyWebpage(
+                        page_id=str(uuid.uuid4()),
+                        page_name=f'{self.page_name}-{element_name}',
+                        page=popup,
+                        my_browser_context=self.my_browser_context
+                    )
+                    # 将新打开的页面加入到浏览器上下文对象中
+                    await self.my_browser_context.add_page(new_page)
+                    return new_page
+        except TimeoutError:
+            logger.info(f'{element_name}点击成功,没有新页面打开')
+            return None
         except Exception as e:
-            logger.info(f'{element_name}点击后,没有打开新页面')
-
-        if popup:
-            new_page = MyWebpage(
-                page_id=str(uuid.uuid4()),
-                page_name=f'{self.page_name}-{element_name}',
-                page=popup,
-                my_browser_context=self.my_browser_context
-            )
-            # 将新打开的页面加入到浏览器上下文对象中
-            logger.info(f'成功打开新页面:{new_page.page_name}')
-            await self.my_browser_context.add_page(new_page)
-
-        return 'click_ok'
+            logger.info(f'{element_name}点击异常', e)
+            return f'{element_name}点击异常, 异常类型为:{type(e).__name__}'
 
     async def _show_click_indicator(self, position: list[int], element_name: str):
         """
@@ -133,7 +132,7 @@ class MyWebpage:
         :return:
         """
         await self.show_box_selection(position)
-        await snapshot(self, element_name)
+        await self.snapshot(element_name)
         await asyncio.sleep(1.5)  # 显示时长
         await self.hide_box_selection()
 
@@ -189,7 +188,7 @@ class MyWebpage:
 
     async def get_locator(self, element_name: str) -> Locator | None:
         # 获取当前页面截图的base64数据
-        page_snapshot_base64 = await get_snapshot_base64(self, element_name)
+        page_snapshot_base64 = await self.get_snapshot_base64('定位器', element_name)
         # 构造提问
         messages = [{
             "role": "user",
@@ -263,7 +262,12 @@ class MyWebpage:
         :param value: 输入的值
         :return:
         """
-        if await self.mouse_click(element_name) != 'click_ok':
+        # str类型为报错情况
+        new_page = await self.mouse_click(element_name)
+        if isinstance(new_page, MyWebpage) or new_page is None:
+            # 成功的情况,目前不做处理
+            pass
+        elif isinstance(new_page, str):
             return False
 
         # 输入的每个字符间隔100ms
@@ -272,43 +276,64 @@ class MyWebpage:
         # await self.page.keyboard.insert_text(value)
         return True
 
-    async def keyboard_press(self, key: str) -> bool:
+    async def keyboard_press(self, key: str) -> 'None | str | MyWebpage':
         """
         模拟键盘按键
         :param key: 按键名称, 可以用+来构建快键键,比如 Shift+1 即为 !
-        :return:
+        :return: 新的页面
         """
         # 格式化按键名称
         key = os_util.format_keyboard_key(key)
+        if key not in MyWebpage.key_list:
+            logger.error(f'按键{key}不存在')
+            return f'按键{key}不存在'
+
         try:
-            await self.page.keyboard.press(key)
-            logger.info(f'{key} 按键已按下')
-            return True
+            await self.page.wait_for_load_state("domcontentloaded")
+            async with self.page.expect_popup(timeout=3000) as popup_info:
+                await self.page.keyboard.press(key)
+                popup = await popup_info.value
+                if popup:
+                    logger.info(f'{self.page_name}打开新页面:{await popup.title()}')
+                    new_page = MyWebpage(
+                        page_id=str(uuid.uuid4()),
+                        page_name=f'{self.page_name}-{await popup.title()}',
+                        page=popup,
+                        my_browser_context=self.my_browser_context
+                    )
+                    # 将新打开的页面加入到浏览器上下文对象中
+                    await self.my_browser_context.add_page(new_page)
+                    logger.info(f'{self.page_name}已打开新页面:{new_page.page_name}')
+                    return new_page
+        except TimeoutError:
+            logger.info(f'按压{key}成功,未打开新页面')
+            return None
         except Exception as e:
-            logger.exception(f'{key} 按键按下异常', e)
-            return False
+            logger.exception(f'按键{key}异常', e)
+            return f'按压{key}异常,异常类型为:{type(e).__name__}'
 
+    async def snapshot(self, operation: str, element_name: Optional[str] = '') -> bytes:
+        """
+        获取当前页面的截图
+        :param operation: 操作类型,例如点击,输入,快照等
+        :param element_name: 对象名称或描述
+        :return: 截图的二进制数据
+        """
+        await self.page.wait_for_load_state("load")
+        img_path = os.getenv('IMG_PATH')
+        img_name = f'{datetime.now().strftime("%Y%m%d%H%M%S")}_{operation}_{self.page_name}_{element_name if element_name else '快照'}.png'
+        img_save_path = os.path.join(img_path, img_name)
+        return await self.page.screenshot(path=img_save_path, full_page=False)
 
-async def snapshot(my_page: MyWebpage, element_name: str) -> bytes:
-    """
-    获取当前页面的截图
-    :param element_name: 对象名称或描述
-    :param my_page: 页面对象
-    :return: 截图的二进制数据
-    """
-    await my_page.page.wait_for_load_state("load")
-    return await my_page.page.screenshot(path=f'{my_page.page_name}_{element_name}.png', full_page=True)
-
-
-async def get_snapshot_base64(my_page: MyWebpage, element_name: str) -> str:
-    """
-    获取当前页面的截图的base64编码
-    :param my_page: 页面对象
-    :param element_name: 元素对象的名字或描述
-    :return: 截图的base64编码
-    """
-    page_img_bytes = await snapshot(my_page, element_name)
-    return f'data:image/png;base64,{base64.b64encode(page_img_bytes).decode('utf-8')}'
+    async def get_snapshot_base64(self, operation: str, element_name: Optional[str] = '') -> str:
+        """
+        获取当前页面的截图的base64编码
+        :param operation: 操作类型
+        :param element_name: 元素对象的名字或描述
+        :return: 截图的base64编码
+        """
+        page_img_bytes = await self.snapshot(operation, element_name)
+        return f'data:image/png;base64,{base64.b64encode(page_img_bytes).decode('utf-8')}'
 
 
 async def get_html_by_position(my_page: MyWebpage, position: list[int]) -> str:
@@ -518,118 +543,45 @@ async def get_element_xpath_by_model(messages: list[dict]) -> str:
 
 async def get_relative_position(my_page: MyWebpage, position: list[int]) -> list[int]:
     """
-    获取相对位置
-    :param my_page:
-    :param position:
-    :return:
+    获取视口坐标（当截图为 full_page=False 时，模型返回的坐标已经是视口坐标）
+    :param my_page: 页面对象
+    :param position: 归一化坐标 [x_min, y_min, x_max, y_max]，范围 0-1000
+    :return: 视口内的像素坐标 [x, y]
     """
-    client = await my_page.page.context.new_cdp_session(my_page.page)
-
     try:
-        # 1. 启用 DOM domain（关键步骤！）
-        await client.send("DOM.enable")
+        # 1. 获取视口尺寸
+        viewport_size = my_page.page.viewport_size
+        if not viewport_size:
+            logger.error('无法获取视口尺寸')
+            return []
 
-        # 2. 获取整个文档（必须在使用 pushNodesByBackendIdsToFrontend 之前调用）
-        await client.send("DOM.getDocument", {"depth": -1})
+        viewport_width = viewport_size['width']
+        viewport_height = viewport_size['height']
 
-        # 3. 确保页面已加载完成
-        await my_page.page.wait_for_load_state("domcontentloaded")
+        logger.info(f'视口尺寸: {viewport_width}x{viewport_height}')
 
-        # 4. 获取页面实际尺寸（用于坐标转换）
-        page_size = await my_page.page.evaluate('''
-                () => ({
-                    width: Math.max(
-                        document.body.scrollWidth,
-                        document.documentElement.scrollWidth,
-                        document.body.offsetWidth,
-                        document.documentElement.offsetWidth,
-                        document.documentElement.clientWidth
-                    ),
-                    height: Math.max(
-                        document.body.scrollHeight,
-                        document.documentElement.scrollHeight,
-                        document.body.offsetHeight,
-                        document.documentElement.offsetHeight,
-                        document.documentElement.clientHeight
-                    )
-                })
-            ''')
-        page_width = page_size['width']
-        page_height = page_size['height']
-
-        logger.info(f'页面实际尺寸: {page_width}x{page_height}')
-
-        # 5. 将模型返回的归一化坐标(0-1000)转换为真实像素坐标
+        # 2. 将模型返回的归一化坐标(0-1000)转换为视口像素坐标
         if len(position) == 4:
-            # 模型返回的是 0-1000 范围的归一化坐标，需要转换为真实像素
-            x_min_real = int(position[0] * page_width / 1000)
-            y_min_real = int(position[1] * page_height / 1000)
-            x_max_real = int(position[2] * page_width / 1000)
-            y_max_real = int(position[3] * page_height / 1000)
+            # 模型返回的是 0-1000 范围的归一化坐标，转换为视口像素坐标
+            x_min = int(position[0] * viewport_width / 1000)
+            y_min = int(position[1] * viewport_height / 1000)
+            x_max = int(position[2] * viewport_width / 1000)
+            y_max = int(position[3] * viewport_height / 1000)
 
             logger.info(
-                f'归一化坐标: {position} -> 真实像素坐标: [{x_min_real}, {y_min_real}, {x_max_real}, {y_max_real}]')
+                f'归一化坐标: {position} -> 视口像素坐标: [{x_min}, {y_min}, {x_max}, {y_max}]')
 
             # 计算中心点
-            center_x = int((x_min_real + x_max_real) / 2)
-            center_y = int((y_min_real + y_max_real) / 2)
+            center_x = int((x_min + x_max) / 2)
+            center_y = int((y_min + y_max) / 2)
+
+            logger.info(f'点击中心点: ({center_x}, {center_y})')
+
+            return [center_x, center_y]
         else:
             logger.error(f'position格式错误: {position}')
             return []
 
-        # 6. 获取页面的滚动偏移量（关键修复！）
-        scroll_position = await my_page.page.evaluate('''
-                () => ({
-                    scrollX: window.pageXOffset || document.documentElement.scrollLeft,
-                    scrollY: window.pageYOffset || document.documentElement.scrollTop
-                })
-            ''')
-        scroll_x = scroll_position['scrollX']
-        scroll_y = scroll_position['scrollY']
-
-        logger.info(f'页面滚动偏移量: scrollX={scroll_x}, scrollY={scroll_y}')
-
-        # 7. 转换为视口坐标（全页坐标 - 滚动偏移 = 视口坐标）
-        viewport_x = center_x - scroll_x
-        viewport_y = center_y - scroll_y
-
-        logger.info(f'全页中心点: ({center_x}, {center_y}) -> 视口坐标: ({viewport_x}, {viewport_y})')
-
-        # 8. 检查坐标是否在视口内
-        viewport_size = my_page.page.viewport_size
-        if viewport_size:
-            if viewport_x < 0 or viewport_y < 0 or viewport_x > viewport_size['width'] or viewport_y > viewport_size[
-                'height']:
-                logger.warning(f'元素不在当前视口内，尝试滚动到元素位置')
-                # 滚动到元素位置
-                await my_page.page.evaluate(f'''
-                        window.scrollTo({{
-                            left: {center_x - viewport_size['width'] // 2},
-                            top: {center_y - viewport_size['height'] // 2},
-                            behavior: 'instant'
-                        }})
-                    ''')
-                # 等待滚动完成
-                await asyncio.sleep(0.5)
-                # 重新计算视口坐标
-                scroll_position = await my_page.page.evaluate('''
-                        () => ({
-                            scrollX: window.pageXOffset || document.documentElement.scrollLeft,
-                            scrollY: window.pageYOffset || document.documentElement.scrollTop
-                        })
-                    ''')
-                scroll_x = scroll_position['scrollX']
-                scroll_y = scroll_position['scrollY']
-                viewport_x = center_x - scroll_x
-                viewport_y = center_y - scroll_y
-                logger.info(f'滚动后新视口坐标: ({viewport_x}, {viewport_y})')
-        return [viewport_x, viewport_y]
     except Exception as e:
-        logger.exception(f'获取相对位置异常', e)
+        logger.exception(f'获取视口坐标异常', e)
         return []
-    finally:
-        # 13. 禁用 DOM domain，释放资源
-        try:
-            await client.send("DOM.disable")
-        except:
-            pass

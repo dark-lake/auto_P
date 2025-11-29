@@ -1,14 +1,13 @@
 import asyncio
 import json
 import os
-from typing import Optional
 from contextlib import AsyncExitStack
+from typing import Optional
 
+from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-
 from openai import OpenAI
-from dotenv import load_dotenv
 
 from utils.logger_util import logger
 
@@ -67,6 +66,7 @@ class Agent:
         tools = await self.build_tools_schema()
 
         while True:
+            msg_len = len(messages)
             response = self.openai.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL"),
                 messages=messages,
@@ -109,14 +109,30 @@ class Agent:
                     tool_output = result.structuredContent
                     final_text.append(f"[Tool {tool_name} result: {tool_output}]")
 
-                    messages.append({
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": str(tool_output),
-                        "tool_call_id": tool_call_id
-                    })
+                    # 对于图片类型,message需要特殊处理一下
+                    if tool_output and tool_output.get('result').startswith('data:image/'):
+                        messages.append({
+                            "role": "tool",
+                            "name": tool_name,
+                            "content": [
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": tool_output.get('result')
+                                    }
+                                }
+                            ],
+                            "tool_call_id": tool_call_id
+                        })
+                    else:
+                        messages.append({
+                            "role": "tool",
+                            "name": tool_name,
+                            "content": str(tool_output),
+                            "tool_call_id": tool_call_id
+                        })
 
-                for msg in messages:
+                for msg in messages[msg_len:]:
                     logger.info(f'Message: {msg}')
                 # 继续下一轮 LLM 推理
                 continue
