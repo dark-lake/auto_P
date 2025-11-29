@@ -6,4 +6,8 @@
 *.xml
 *.txt
 *.env
+*.pyc
 config.json
+*.egg-info/
+build/
+dist/
