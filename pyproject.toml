@@ -16,3 +16,12 @@ dependencies = [
     "playwright>=1.56.0",
     "python-docx>=1.2.0",
 ]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["browser_p*", "mcp*", "doc_p*", "utils*"]
+exclude = ["logs*", "*.egg-info", ".git*", ".venv*", "__pycache__*"]

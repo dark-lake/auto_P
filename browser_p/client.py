@@ -9,7 +9,9 @@ from mcp.client.stdio import stdio_client
 
 from openai import OpenAI
 from dotenv import load_dotenv
-from logger_util import logger
+
+from utils.logger_util import logger
+
 load_dotenv()  # load environment variables from .env
 
 

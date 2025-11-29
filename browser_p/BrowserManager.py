@@ -1,6 +1,5 @@
 from BrowserSession import BrowserSession
-from MyPage import MyPage
-from logger_util import logger
+from utils.logger_util import logger
 
 
 class BrowserManager:

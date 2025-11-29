@@ -1,5 +1,5 @@
 import uuid
-from logger_util import logger
+from utils.logger_util import logger
 from playwright.async_api import Browser
 from MyPage import MyWebpage
 

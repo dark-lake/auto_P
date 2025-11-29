@@ -2,8 +2,7 @@ import uuid
 from playwright.async_api import Browser, BrowserContext, Page
 from typing import Optional
 from MyPage import MyWebpage
-
-from logger_util import logger
+from utils.logger_util import logger
 
 
 class MyBrowserContext:

@@ -1,19 +1,10 @@
-from typing import Any, Coroutine
-import sys
-from pathlib import Path
-
-# 将项目根目录添加到 Python 路径
-project_root = Path(__file__).parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from openai import AsyncOpenAI
 from playwright.async_api import async_playwright, Browser
 from BrowserSession import BrowserSession
 import asyncio
-from logger_util import logger
+from utils.logger_util import logger
 import uuid
 from BrowserContextManager import browser_context_manager, MyBrowserContext
 import MyPage

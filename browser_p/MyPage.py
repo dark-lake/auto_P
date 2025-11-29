@@ -11,19 +11,12 @@ import uuid
 if TYPE_CHECKING:
     from BrowserContextManager import MyBrowserContext
 
-from logger_util import logger
+from utils.logger_util import logger
+from utils import os_util
 from openai import AsyncOpenAI
 import json
 import os
-import sys
-from pathlib import Path
 
-# 将项目根目录添加到 Python 路径
-project_root = Path(__file__).parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
-import my_utils.my_utils as my_utils
 load_dotenv()
 
 
@@ -286,7 +279,7 @@ class MyWebpage:
         :return:
         """
         # 格式化按键名称
-        key = my_utils.format_keyboard_key(key)
+        key = os_util.format_keyboard_key(key)
         try:
             await self.page.keyboard.press(key)
             logger.info(f'{key} 按键已按下')
