@@ -1,4 +1,11 @@
 from typing import Any, Coroutine
+import sys
+from pathlib import Path
+
+# 将项目根目录添加到 Python 路径
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
@@ -101,6 +108,9 @@ async def click_element(page_name: str, element_desc: str) -> str:
 
     browser_context = await browser_context_manager.get_browser_context()
     page = await browser_context.get_page_by_name(page_name)
+    if not page:
+        logger.info(f'未获取到{page_name}页面对象')
+        return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
     try:
         click_res = await page.mouse_click(element_desc)
         if click_res == 'click_ok':
@@ -159,13 +169,13 @@ async def do_open_page(url: str, browser_context_id: str, page_name: str) -> str
         print(f'页面相应状态为：{res.status}')
         if res.status != 200:
             logger.info(f'{page_name}-{url}页面打开异常：{res.status}')
-            return f'{page_name}-{url}页面打开失败'
+            return f'{page_name}页面打开失败'
         else:
             logger.info(f'{page_name}-{url}页面打开成功：{res.status}')
-            return f'{page_name}-{url} 页面打开成功'
+            return f'{page_name}页面打开成功'
     except Exception as e:
         logger.error(f'{page_name}-{url}页面访问网络异常', e)
-        return f'{page_name}-{url}页面打开失败'
+        return f'{page_name}页面打开失败'
 
 
 @mcp.tool(
@@ -209,8 +219,8 @@ async def close_page(page_name: str) -> str:
     # 通过page_name获取page_id
     page = await browser_context.get_page_by_name(page_name)
     if not page:
-        logger.info(f'未获取到页面对象')
-        return f'未获取到页面对象'
+        logger.info(f'未获取到{page_name}页面对象')
+        return f'未获取到{page_name}页面对象'
     # 关闭页面
     await page.close()
     logger.info(f'{page.page_name}页面已关闭')
@@ -234,6 +244,9 @@ async def fill_input_element(page_name: str, element_desc: str, value: str) -> s
 
     browser_context = await browser_context_manager.get_browser_context()
     page = await browser_context.get_page_by_name(page_name)
+    if not page:
+        logger.info(f'填充{element_desc}-{value}时未获取到页面对象')
+        return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
 
     # 填充输入框, 先通过键盘输入,如果不成功再改用locator方式输入
     if await page.fill_input_element_by_keyboard(element_desc, value):
@@ -262,6 +275,9 @@ async def press_keyboard(page_name: str, key: str) -> str:
 
     browser_context = await browser_context_manager.get_browser_context()
     page = await browser_context.get_page_by_name(page_name)
+    if not page:
+        logger.info(f'按键{key}时未获取到{page_name}页面对象')
+        return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
     if await page.keyboard_press(key):
         logger.info(f'已按压{key}按键')
         return f'已按压{key}按键'

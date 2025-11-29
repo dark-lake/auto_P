@@ -1,8 +1,6 @@
 import uuid
-from typing import TYPE_CHECKING
 from playwright.async_api import Browser, BrowserContext, Page
 from typing import Optional
-# if TYPE_CHECKING:
 from MyPage import MyWebpage
 
 from logger_util import logger
@@ -27,7 +25,7 @@ class MyBrowserContext:
         page_id = str(uuid.uuid4())
         my_page = MyWebpage(page_id=page_id, page_name=page_name, page=page, my_browser_context=self)
         self.pages[page_id] = my_page
-        logger.info(f'在浏览器会话ID为{self.id}的上下文中成功构建了{page_id}页面对象')
+        logger.info(f'在浏览器会话ID为[{self.id}]的上下文中成功构建了[{page_id}],[{page_name}]页面对象')
         return my_page
 
     async def add_page(self, page: MyWebpage) -> None:

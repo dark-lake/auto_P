@@ -15,7 +15,15 @@ from logger_util import logger
 from openai import AsyncOpenAI
 import json
 import os
+import sys
+from pathlib import Path
 
+# 将项目根目录添加到 Python 路径
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+import my_utils.my_utils as my_utils
 load_dotenv()
 
 
@@ -278,7 +286,7 @@ class MyWebpage:
         :return:
         """
         # 格式化按键名称
-        key = await format_keyboard_key(key)
+        key = my_utils.format_keyboard_key(key)
         try:
             await self.page.keyboard.press(key)
             logger.info(f'{key} 按键已按下')
@@ -286,36 +294,6 @@ class MyWebpage:
         except Exception as e:
             logger.exception(f'{key} 按键按下异常', e)
             return False
-
-
-async def format_keyboard_key(key: str) -> str:
-    """
-    格式化键盘按键, 使得返回的都是符合playwright要求的格式
-    :param key: 按键名称, 可以用+来构建快键键,比如 Shift+1 即为 !
-    :return: 格式化后的按键名称
-    """
-    # TODO: 修复mac与win上command和win按键名不同问题
-    special_keys = ['arrowup', 'arrowdown', 'arrowleft', 'arrowright']
-    # 处理key的格式
-    if '+' not in key:
-        # 如果开头第一个是字母,就转成大写
-        if key.lower() in special_keys:
-            key = (key[:5]).capitalize() + (key[5:]).capitalize()
-        else:
-            key = key.capitalize()
-    else:
-        key1, key2 = key.split('+')
-        if key1.lower() in special_keys:
-            key1 = (key[:5]).capitalize() + (key[5:]).capitalize()
-        else:
-            key1 = key.capitalize()
-        if key2.lower() in special_keys:
-            key2 = (key[:5]).capitalize() + (key[5:]).capitalize()
-        else:
-            key2 = key.capitalize()
-        key = key1 + '+' + key2
-
-    return key
 
 
 async def snapshot(my_page: MyWebpage, element_name: str) -> bytes:
