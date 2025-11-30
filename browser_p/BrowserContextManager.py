@@ -1,6 +1,8 @@
 import uuid
-from playwright.async_api import Browser, BrowserContext, Page
 from typing import Optional
+
+from playwright.async_api import Browser, BrowserContext
+
 from MyPage import MyWebpage
 from utils.logger_util import logger
 
@@ -19,7 +21,7 @@ class MyBrowserContext:
         :return:
         """
         # from MyPage import MyWebpage  # 运行时导入，避免循环依赖
-        
+
         page = await self.browser_context.new_page()
         page_id = str(uuid.uuid4())
         my_page = MyWebpage(page_id=page_id, page_name=page_name, page=page, my_browser_context=self)
@@ -100,17 +102,27 @@ class BrowserContextManager:
     async def set_browser(self, browser: Browser) -> None:
         self.browser = browser
 
-    async def add_browser_context(self) -> MyBrowserContext:
+    async def add_browser_context(self, browser_context: BrowserContext = None) -> MyBrowserContext:
         """
         新增浏览器上下文对象
+        :param browser_context: 当使用本地浏览器时传入,默认使用新建浏览器
         :return:
         """
-        browser_context = await self.browser.new_context()
-        my_browser_context = MyBrowserContext(
-            browser=self.browser,
-            browser_context_id=str(uuid.uuid4()),
-            browser_context=browser_context
-        )
+        if browser_context:
+            my_browser_context = MyBrowserContext(
+                browser=self.browser,
+                browser_context_id=str(uuid.uuid4()),
+                browser_context=browser_context
+            )
+        else:
+            if not self.browser:
+                raise Exception('请先设置浏览器对象')
+            browser_context = await self.browser.new_context()
+            my_browser_context = MyBrowserContext(
+                browser=self.browser,
+                browser_context_id=str(uuid.uuid4()),
+                browser_context=browser_context
+            )
         self.browser_contexts[my_browser_context.id] = my_browser_context
 
         return my_browser_context

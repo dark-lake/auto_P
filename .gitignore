@@ -7,7 +7,7 @@
 *.txt
 *.env
 *.pyc
-config.json
+*_config.json
 *.egg-info/
 build/
 dist/

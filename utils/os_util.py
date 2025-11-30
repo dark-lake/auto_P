@@ -1,4 +1,8 @@
+import json
+import os
 import sys
+
+from utils.logger_util import logger
 
 
 def get_os() -> int:
@@ -51,3 +55,18 @@ def do_format_key(key: str) -> str:
         key = 'Alt'
 
     return key
+
+
+async def get_config(file_path: str) -> dict:
+    """
+    获取.json格式的配置文件内容
+    :param file_path: .json配置文件路径
+    :return:
+    """
+    import aiofiles
+    if not os.path.exists(file_path):
+        logger.info(f'配置文件不存在: {file_path}')
+        return {}
+    async with aiofiles.open(file_path, 'r') as f:
+        config = await f.read()
+        return json.loads(config)

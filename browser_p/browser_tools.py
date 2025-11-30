@@ -6,6 +6,7 @@ from playwright.async_api import async_playwright
 
 import MyPage
 from BrowserContextManager import browser_context_manager, MyWebpage
+from utils import os_util
 from utils.logger_util import logger
 
 load_dotenv()
@@ -28,9 +29,20 @@ async def open_browser() -> str:
             return f'浏览器上下文已启动成功,无需重复启动'
 
     playwright = await async_playwright().start()
-    browser = await playwright.chromium.launch(headless=False)
-    await browser_context_manager.set_browser(browser)
-    browser_context_obj = await browser_context_manager.add_browser_context()
+    if os.getenv("USER_DATA_DIR"):
+        logger.info(f'使用用户数据目录:{os.getenv("USER_DATA_DIR")}')
+        # 此时直接返回的就是浏览器上下文对象,而不是浏览器对象
+        browser_context = await playwright.chromium.launch_persistent_context(
+            user_data_dir=os.getenv("USER_DATA_DIR"),
+            headless=False,
+            executable_path=os.getenv("CHROME_PATH"),
+        )
+        browser_context_obj = await browser_context_manager.add_browser_context(browser_context)
+    else:
+        browser = await playwright.chromium.launch(headless=False)
+        await browser_context_manager.set_browser(browser)
+        browser_context_obj = await browser_context_manager.add_browser_context()
+
     if not browser_context_obj:
         logger.info(f'浏览器上下文对象未创建')
         return f'浏览器上下文对象未创建，流程终止'
@@ -332,6 +344,20 @@ async def scroll_page(page_name: str, x: int, y: int) -> str:
     except Exception as e:
         logger.info(f'滚动{page.page_name}页面时发生错误:{e}')
         return f'滚动{page.page_name}页面时发生错误:{type(e).__name__}'
+
+
+@mcp.tool(
+    name="get_account_info",
+    description="当你要登录某个网站时,该工具可以告诉你所有网站的账号和密码"
+)
+async def get_account_info() -> str:
+    """
+    当你需要某个网站的用户信息时,该工具可以告诉你目前所有配置的网站的用户名与密码
+    :return: 已配置的所有账户名和密码
+    """
+    config = await os_util.get_config(os.getenv('ACCOUNT_INFO'))
+    return f'已配置的账户信息为:{config}'
+
 
 def check_status() -> bool:
     """
