@@ -12,7 +12,6 @@ from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from BrowserContextManager import MyBrowserContext
-
 from utils.logger_util import logger
 from utils import os_util
 from openai import AsyncOpenAI
@@ -334,6 +333,20 @@ class MyWebpage:
         """
         page_img_bytes = await self.snapshot(operation, element_name)
         return f'data:image/png;base64,{base64.b64encode(page_img_bytes).decode('utf-8')}'
+
+    async def scroll_page(self, x: int, y: int) -> Exception | None:
+        """
+        模拟鼠标滚轮
+        :param x: 水平滚动的像素
+        :param y: 垂直滚动的像素
+        :return: 成功则返回None,失败则返回异常
+        """
+        try:
+            await self.page.mouse.wheel(x, y)
+            return None
+        except Exception as e:
+            logger.exception(f'鼠标移动异常', e)
+            raise e
 
 
 async def get_html_by_position(my_page: MyWebpage, position: list[int]) -> str:

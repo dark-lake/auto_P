@@ -306,6 +306,33 @@ async def get_page_snapshot(page_name: str) -> str:
     return f'{await page.get_snapshot_base64('快照')}'
 
 
+@mcp.tool(
+    name="scroll_page",
+    description="滚动页面"
+)
+async def scroll_page(page_name: str, x: int, y: int) -> str:
+    """
+    滚动页面
+    :param page_name: 页面名称
+    :param x: 滚动的x轴距离
+    :param y: 滚动的y轴距离
+    :return: 滚动结果
+    """
+    if not check_status():
+        return f'浏览器未启动,请先启动浏览器'
+    browser_context = await browser_context_manager.get_browser_context()
+    page = await browser_context.get_page_by_name(page_name)
+    if not page:
+        logger.info(f'滚动{page_name}页面时未获取到页面对象')
+        return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
+    try:
+        await page.scroll_page(x, y)
+        logger.info(f'已滚动{page.page_name}页面,x轴距离为:{x},y轴距离为:{y}')
+        return f'已滚动{page.page_name}页面,x轴距离为:{x},y轴距离为:{y}'
+    except Exception as e:
+        logger.info(f'滚动{page.page_name}页面时发生错误:{e}')
+        return f'滚动{page.page_name}页面时发生错误:{type(e).__name__}'
+
 def check_status() -> bool:
     """
     检查浏览器上下文管理以及浏览器上下文对象是否存在
