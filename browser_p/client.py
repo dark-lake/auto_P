@@ -112,10 +112,12 @@ class Agent:
 
                 # 将工具输出追加到 messages，让模型知道工具结果
                 if hasattr(message, 'reasoning_content') and message.reasoning_content:
-                    messages.append({
-                        "role": "assistant",
-                        "content": message.reasoning_content
-                    })
+                    msg = message.model_dump()
+                    msg.pop("reasoning_content", None)  # 移除大模型思考的部分
+                    messages.append(msg)
+                else:
+                    # 不是深度思考的,直接将调用工具的assistant追加到messages
+                    messages.append(message.model_dump())
 
                 for tool_call in message.tool_calls:
                     tool_call_id = tool_call.id

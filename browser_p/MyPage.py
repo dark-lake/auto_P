@@ -8,7 +8,6 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from playwright.async_api import Page, Response, Locator
 from playwright.async_api import TimeoutError
-from pydantic import BaseModel
 
 from my_exceptions.MyBaseException import MyBaseException, MyBaseExceptionCode
 
@@ -18,6 +17,7 @@ from utils.logger_util import logger
 from utils import os_util
 from openai import AsyncOpenAI
 import os
+from response_format import Bbox, XpathStr
 
 load_dotenv()
 
@@ -86,7 +86,7 @@ class MyWebpage:
                 },
                 {
                     "type": "text",
-                    "text": '上面是一张网页截图。请帮我找出截图中“' + element_name + '”的位置,要求输出bounding box 的坐标：既x_min,y_min,x_max,y_max。若元素不存在,请返回 {}. 处理过程要快速',
+                    "text": '上面是一张网页截图。请帮我找出截图中“' + element_name + '”的位置,要求输出bounding box 的坐标：既x_min,y_min,x_max,y_max。若元素不存在,请返回 {}.json格式, 处理过程要快速',
                 },
             ],
         }]
@@ -351,7 +351,7 @@ class MyWebpage:
             raise MyBaseException(MyBaseExceptionCode.SCROLL_FAILED, f'{self.page_name} 鼠标滚轮异常')
 
 
-async def get_html_by_position(my_page: MyWebpage, position: list[int]) -> str:
+async def get_html_by_position(my_page: MyWebpage, position: dict[str, int]) -> str:
     """
     根据坐标获取其局部html代码
     :param my_page: 页面对象
@@ -445,7 +445,7 @@ def remove_js_css_with_inline(html: str) -> str:
         return html
 
 
-async def get_element_position_by_model(messages: list[dict]) -> list[int]:
+async def get_element_position_by_model(messages: list[dict]) -> 'Bbox|None':
     """
     通过调用视觉大模型来获取元素的bbox属性,既x_min,y_min,x_max,y_max
     :param messages: 大模型的输入
@@ -457,14 +457,12 @@ async def get_element_position_by_model(messages: list[dict]) -> list[int]:
         timeout=120,
     )
 
-    class Bbox(BaseModel):
-        bbox: list[int]
-
     try:
         response = await client.chat.completions.parse(
-            model=os.getenv("OPENAI_MODEL"),
+            model=os.getenv("VIS_OPEN_MODEL"),
             messages=messages,
             response_format=Bbox,  # 指定响应解析模型
+            top_p=0.3,
             extra_body={
                 "thinking": {
                     "type": "disabled"  # 不使用深度思考能力
@@ -472,9 +470,10 @@ async def get_element_position_by_model(messages: list[dict]) -> list[int]:
                 }
             }
         )
+        logger.info(f'视觉模型处理结果: {response.choices[0].message}')
         model_res = response.choices[0].message.parsed
         logger.info(f'视觉模型处理结果: {model_res}')
-        return model_res.bbox if model_res.bbox else []
+        return model_res if model_res else None
     except Exception as e:
         logger.exception(f'视觉模型处理异常', e)
         raise MyBaseException(MyBaseExceptionCode.MODEL_FAILED, f'视觉模型处理异常')
@@ -540,13 +539,12 @@ async def get_element_xpath_by_model(messages: list[dict]) -> str:
         timeout=120,
     )
 
-    class XpathStr(BaseModel):
-        xpath: str
     try:
         response = await client.chat.completions.parse(
             model=os.getenv("OPENAI_MODEL"),
             messages=messages,
             response_format=XpathStr,  # 指定响应解析模型
+            top_p=0.3,
             extra_body={
                 "thinking": {
                     "type": "disabled"  # 不使用深度思考能力
@@ -562,7 +560,7 @@ async def get_element_xpath_by_model(messages: list[dict]) -> str:
         raise MyBaseException(MyBaseExceptionCode.MODEL_FAILED, f'大模型回答异常')
 
 
-async def get_relative_position(my_page: MyWebpage, position: list[int]) -> list[int]:
+async def get_relative_position(my_page: MyWebpage, position: Bbox | None) -> list[int]:
     """
     获取视口坐标（当截图为 full_page=False 时，模型返回的坐标已经是视口坐标）
     :param my_page: 页面对象
@@ -581,12 +579,12 @@ async def get_relative_position(my_page: MyWebpage, position: list[int]) -> list
     logger.info(f'视口尺寸: {viewport_width}x{viewport_height}')
 
     # 2. 将模型返回的归一化坐标(0-1000)转换为视口像素坐标
-    if len(position) == 4:
+    if position:
         # 模型返回的是 0-1000 范围的归一化坐标，转换为视口像素坐标
-        x_min = int(position[0] * viewport_width / 1000)
-        y_min = int(position[1] * viewport_height / 1000)
-        x_max = int(position[2] * viewport_width / 1000)
-        y_max = int(position[3] * viewport_height / 1000)
+        x_min = int(position.x_min * viewport_width / 1000)
+        y_min = int(position.y_min * viewport_height / 1000)
+        x_max = int(position.x_max * viewport_width / 1000)
+        y_max = int(position.y_max * viewport_height / 1000)
 
         logger.info(
             f'归一化坐标: {position} -> 视口像素坐标: [{x_min}, {y_min}, {x_max}, {y_max}]')
