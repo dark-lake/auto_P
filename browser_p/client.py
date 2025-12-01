@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from contextlib import AsyncExitStack
+from copy import deepcopy
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -88,7 +89,7 @@ class Agent:
             if hasattr(message, "tool_calls") and message.tool_calls:
                 print('-'*20)
                 for i in message.tool_calls:
-                    print(f'\t{i}')
+                    print(f'\tID:{i.id}\n\tFUNCTION:{i.function}')
                 print('-' * 20)
 
                 # 将工具输出追加到 messages，让模型知道工具结果
@@ -105,13 +106,11 @@ class Agent:
                     final_text.append(f"[Calling tool {tool_name} with args {tool_args}]")
                     # 执行工具
                     result = await self.session.call_tool(tool_name, tool_args)
-                    logger.info(f'Result: {result}')
                     tool_output = result.structuredContent
                     final_text.append(f"[Tool {tool_name} result: {tool_output}]")
 
                     # 对于图片类型,message需要特殊处理一下
                     if tool_output and tool_output.get('result').startswith('data:image/'):
-                        logger.info(f'result: {len(tool_output.get('result', 'No result'))}')
                         messages.append({
                             "role": "tool",
                             "name": tool_name,
@@ -134,7 +133,14 @@ class Agent:
                         })
 
                 for msg in messages[msg_len:]:
-                    logger.info(f'Message: {msg}')
+                    if msg.get("name") != "get_page_snapshot":
+                        logger.info(f'Message: {msg}')
+                    else:
+                        copy_msg = deepcopy(msg)
+                        img_data = copy_msg.get('content')[0]  # 字符串
+                        img_data['image_url'][
+                            'url'] = f'base64太长,展示其长度即可:{str(len(img_data['image_url'].get('url', '')))}'
+                        logger.info(f'Message: {copy_msg}')
                 # 继续下一轮 LLM 推理
                 continue
             else:

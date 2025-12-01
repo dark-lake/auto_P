@@ -10,6 +10,8 @@ from playwright.async_api import Page, Response, Locator
 from playwright.async_api import TimeoutError
 from pydantic import BaseModel
 
+from my_exceptions.MyBaseException import MyBaseException, MyBaseExceptionCode
+
 if TYPE_CHECKING:
     from BrowserContextManager import MyBrowserContext
 from utils.logger_util import logger
@@ -60,7 +62,7 @@ class MyWebpage:
     async def get_html(self) -> str:
         return await self.page.content()
 
-    async def mouse_click(self, element_name: str, detail: int = 0) -> 'MyWebpage|str|None':
+    async def mouse_click(self, element_name: str, detail: int = 0) -> 'MyWebpage|None':
         """
         模拟鼠标点击行为
         :param detail: 点击精度,1表示high
@@ -91,13 +93,14 @@ class MyWebpage:
         # 获取位置信息[x_min, y_min, x_max, y_max]
         position = await get_element_position_by_model(messages)
         if not position:
-            return f'未在页面上找到{element_name}'
+            raise MyBaseException(MyBaseExceptionCode.ELEMENT_NOT_FOUND, f'未在页面上找到{element_name}')
 
         # 获取相对位置
         relative_position = await get_relative_position(self, position)
         if not relative_position:
             logger.info(f'相对位置获取失败:{relative_position}')
-            return f'未在页面上找到{element_name}'
+            raise MyBaseException(MyBaseExceptionCode.RELATIVE_POSITION_NOT_FOUND,
+                                  f'元素{element_name}相对位置定位失败')
 
         # 异步显示圆点标记（自动消失，不阻塞点击）
         asyncio.create_task(self._show_click_indicator(relative_position, element_name))
@@ -118,11 +121,10 @@ class MyWebpage:
                     await self.my_browser_context.add_page(new_page)
                     return new_page
         except TimeoutError:
-            logger.info(f'{element_name}点击成功,没有新页面打开')
             return None
         except Exception as e:
             logger.info(f'{element_name}点击异常', e)
-            return f'{element_name}点击异常, 异常类型为:{type(e).__name__}'
+            raise MyBaseException(MyBaseExceptionCode.CLICK_FAILED, f'元素{element_name}点击失败')
 
     async def _show_click_indicator(self, position: list[int], element_name: str):
         """
@@ -132,7 +134,7 @@ class MyWebpage:
         """
         await self.show_box_selection(position)
         await self.snapshot(element_name)
-        await asyncio.sleep(1.5)  # 显示时长
+        await asyncio.sleep(3)  # 显示时长
         await self.hide_box_selection()
 
     async def show_box_selection(self, position: list[int]):
@@ -254,28 +256,28 @@ class MyWebpage:
         else:
             return False
 
-    async def fill_input_element_by_keyboard(self, element_name: str, value: str) -> bool:
+    async def fill_input_element_by_keyboard(self, element_name: str, value: str) -> None:
         """
         填充输入框,通过模拟键盘输入,更加强大
         :param element_name: 元素对象名字或描述
         :param value: 输入的值
         :return:
         """
-        # str类型为报错情况
-        new_page = await self.mouse_click(element_name)
-        if isinstance(new_page, MyWebpage) or new_page is None:
-            # 成功的情况,目前不做处理
-            pass
-        elif isinstance(new_page, str):
-            return False
+        try:
+            # str类型为报错情况
+            await self.mouse_click(element_name)
+            # 输入的每个字符间隔100ms
+            await self.page.keyboard.type(value, delay=60)
+            # insert_text 不会触发键盘事件,不拟人
+            # await self.page.keyboard.insert_text(value)
+        except MyBaseException as e:
+            # mouse_click抛出的异常不处理直接抛出
+            raise e
+        except Exception as e:
+            logger.exception(f'{self.page_id}-{self.page_name} 填充输入框异常', e)
+            raise MyBaseException(MyBaseExceptionCode.FILL_FAILED, f'{self.page_name}页面,填充{element_name}时异常')
 
-        # 输入的每个字符间隔100ms
-        await self.page.keyboard.type(value, delay=60)
-        # insert_text 不会触发键盘事件,不拟人
-        # await self.page.keyboard.insert_text(value)
-        return True
-
-    async def keyboard_press(self, key: str) -> 'None | str | MyWebpage':
+    async def keyboard_press(self, key: str) -> 'None|MyWebpage':
         """
         模拟键盘按键
         :param key: 按键名称, 可以用+来构建快键键,比如 Shift+1 即为 !
@@ -285,7 +287,7 @@ class MyWebpage:
         key = os_util.format_keyboard_key(key)
         if key not in MyWebpage.key_list:
             logger.error(f'按键{key}不存在')
-            return f'按键{key}不存在'
+            raise MyBaseException(MyBaseExceptionCode.KEYBOARD_NOT_FOUND, f'按键{key}不存在')
 
         try:
             await self.page.wait_for_load_state("domcontentloaded")
@@ -293,7 +295,6 @@ class MyWebpage:
                 await self.page.keyboard.press(key)
                 popup = await popup_info.value
                 if popup:
-                    logger.info(f'{self.page_name}打开新页面:{await popup.title()}')
                     new_page = MyWebpage(
                         page_id=str(uuid.uuid4()),
                         page_name=f'{self.page_name}-{await popup.title()}',
@@ -302,14 +303,12 @@ class MyWebpage:
                     )
                     # 将新打开的页面加入到浏览器上下文对象中
                     await self.my_browser_context.add_page(new_page)
-                    logger.info(f'{self.page_name}已打开新页面:{new_page.page_name}')
                     return new_page
         except TimeoutError:
-            logger.info(f'按压{key}成功,未打开新页面')
             return None
         except Exception as e:
             logger.exception(f'按键{key}异常', e)
-            return f'按压{key}异常,异常类型为:{type(e).__name__}'
+            raise MyBaseException(MyBaseExceptionCode.KEYBOARD_PRESS_FAILED, f'按键{key}异常')
 
     async def snapshot(self, operation: str, element_name: Optional[str] = '') -> bytes:
         """
@@ -331,10 +330,14 @@ class MyWebpage:
         :param element_name: 元素对象的名字或描述
         :return: 截图的base64编码
         """
-        page_img_bytes = await self.snapshot(operation, element_name)
-        return f'data:image/png;base64,{base64.b64encode(page_img_bytes).decode('utf-8')}'
+        try:
+            page_img_bytes = await self.snapshot(operation, element_name)
+            return f'data:image/png;base64,{base64.b64encode(page_img_bytes).decode('utf-8')}'
+        except Exception as e:
+            logger.exception(f'{self.page_name} 获取截图异常', e)
+            raise MyBaseException(MyBaseExceptionCode.SNAPSHOT_FAILED, f'{self.page_name} 获取截图异常')
 
-    async def scroll_page(self, x: int, y: int) -> Exception | None:
+    async def scroll_page(self, x: int, y: int) -> None:
         """
         模拟鼠标滚轮
         :param x: 水平滚动的像素
@@ -343,10 +346,9 @@ class MyWebpage:
         """
         try:
             await self.page.mouse.wheel(x, y)
-            return None
         except Exception as e:
             logger.exception(f'鼠标移动异常', e)
-            raise e
+            raise MyBaseException(MyBaseExceptionCode.SCROLL_FAILED, f'{self.page_name} 鼠标滚轮异常')
 
 
 async def get_html_by_position(my_page: MyWebpage, position: list[int]) -> str:
@@ -404,14 +406,14 @@ async def get_html_by_position(my_page: MyWebpage, position: list[int]) -> str:
         html_result = await client.send("DOM.getOuterHTML", {"nodeId": node_id})
         html = html_result.get('outerHTML', '')
         # 12. 去掉非HTML节点
-        # html = remove_js_css_with_inline(html)
+        html = remove_js_css_with_inline(html)
 
         logger.info(f'成功获取局部html，长度: {len(html)}')
         return html
 
     except Exception as e:
         logger.exception(f'获取HTML时出现异常，坐标: {position}', e)
-        return ""
+        raise MyBaseException(MyBaseExceptionCode.HTML_NOT_FOUND, f'{my_page.page_name} 未找到{position}位置的html代码')
     finally:
         # 13. 禁用 DOM domain，释放资源
         try:
@@ -421,22 +423,26 @@ async def get_html_by_position(my_page: MyWebpage, position: list[int]) -> str:
 
 
 def remove_js_css_with_inline(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
+    try:
+        soup = BeautifulSoup(html, "html.parser")
 
-    # 删除 script/style/link
-    for tag in soup(["script", "style"]):
-        tag.decompose()
-    for link in soup.find_all("link", rel="stylesheet"):
-        link.decompose()
+        # 删除 script/style/link
+        for tag in soup(["script", "style"]):
+            tag.decompose()
+        for link in soup.find_all("link", rel="stylesheet"):
+            link.decompose()
 
-    # 删除所有内联事件属性
-    for tag in soup.find_all(True):
-        # 找到以 'on' 开头的属性，例如 onclick/onload
-        event_attrs = [attr for attr in tag.attrs if attr.startswith("on")]
-        for attr in event_attrs:
-            del tag[attr]
+        # 删除所有内联事件属性
+        for tag in soup.find_all(True):
+            # 找到以 'on' 开头的属性，例如 onclick/onload
+            event_attrs = [attr for attr in tag.attrs if attr.startswith("on")]
+            for attr in event_attrs:
+                del tag[attr]
 
-    return str(soup)
+        return str(soup)
+    except Exception as e:
+        logger.exception(f'删除内联属性时出现异常', e)
+        return html
 
 
 async def get_element_position_by_model(messages: list[dict]) -> list[int]:
@@ -471,7 +477,7 @@ async def get_element_position_by_model(messages: list[dict]) -> list[int]:
         return model_res.bbox if model_res.bbox else []
     except Exception as e:
         logger.exception(f'视觉模型处理异常', e)
-        return []
+        raise MyBaseException(MyBaseExceptionCode.MODEL_FAILED, f'视觉模型处理异常')
 
 
 async def add_bk(position: list[int], img_path: str) -> None:
@@ -495,28 +501,31 @@ async def add_bk(position: list[int], img_path: str) -> None:
         logger.error(f'无法读取图片: {img_path}')
         return
 
-    # 获取图像尺寸并缩放坐标(模型输出范围为0-1000)
-    h, w = image.shape[:2]
-    center_x = int(position[0] * w / 1000)
-    center_y = int(position[1] * h / 1000)
+    try:
+        # 获取图像尺寸并缩放坐标(模型输出范围为0-1000)
+        h, w = image.shape[:2]
+        center_x = int(position[0] * w / 1000)
+        center_y = int(position[1] * h / 1000)
 
-    # 圆的半径
-    radius = 20
+        # 圆的半径
+        radius = 20
 
-    # 创建一个遮罩层用于绘制半透明圆
-    overlay = image.copy()
+        # 创建一个遮罩层用于绘制半透明圆
+        overlay = image.copy()
 
-    # 绘制实心红色圆 (OpenCV的颜色格式是BGR)
-    cv2.circle(overlay, (center_x, center_y), radius, (0, 0, 255), -1)  # -1表示填充
+        # 绘制实心红色圆 (OpenCV的颜色格式是BGR)
+        cv2.circle(overlay, (center_x, center_y), radius, (0, 0, 255), -1)  # -1表示填充
 
-    # 混合原图和遮罩层，实现半透明效果
-    alpha = 0.6  # 透明度 (0-1，0完全透明，1完全不透明)
-    image = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
+        # 混合原图和遮罩层，实现半透明效果
+        alpha = 0.6  # 透明度 (0-1，0完全透明，1完全不透明)
+        image = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
 
-    # 保存结果图片
-    output_path = os.path.splitext(img_path)[0] + "_with_circle.png"
-    cv2.imwrite(output_path, image)
-    print(f"成功保存标注图片: {output_path}")
+        # 保存结果图片
+        output_path = os.path.splitext(img_path)[0] + "_with_circle.png"
+        cv2.imwrite(output_path, image)
+        logger.info(f'成功保存标注图片: {output_path}')
+    except Exception as e:
+        logger.exception(f'添加圆异常', e)
 
 
 async def get_element_xpath_by_model(messages: list[dict]) -> str:
@@ -533,7 +542,6 @@ async def get_element_xpath_by_model(messages: list[dict]) -> str:
 
     class XpathStr(BaseModel):
         xpath: str
-
     try:
         response = await client.chat.completions.parse(
             model=os.getenv("OPENAI_MODEL"),
@@ -550,8 +558,8 @@ async def get_element_xpath_by_model(messages: list[dict]) -> str:
         logger.info(f'模型处理结果XPATH: {model_res}')
         return model_res.xpath if model_res.xpath else ''
     except Exception as e:
-        logger.exception(f'视觉模型处理异常', e)
-        return ''
+        logger.exception(f'模型处理异常', e)
+        raise MyBaseException(MyBaseExceptionCode.MODEL_FAILED, f'大模型回答异常')
 
 
 async def get_relative_position(my_page: MyWebpage, position: list[int]) -> list[int]:
@@ -561,40 +569,35 @@ async def get_relative_position(my_page: MyWebpage, position: list[int]) -> list
     :param position: 归一化坐标 [x_min, y_min, x_max, y_max]，范围 0-1000
     :return: 视口内的像素坐标 [x, y]
     """
-    try:
-        # 1. 获取视口尺寸
-        viewport_size = my_page.page.viewport_size
-        if not viewport_size:
-            logger.error('无法获取视口尺寸')
-            return []
+    # 1. 获取视口尺寸
+    viewport_size = my_page.page.viewport_size
+    if not viewport_size:
+        logger.error('无法获取视口尺寸')
+        return []
 
-        viewport_width = viewport_size['width']
-        viewport_height = viewport_size['height']
+    viewport_width = viewport_size['width']
+    viewport_height = viewport_size['height']
 
-        logger.info(f'视口尺寸: {viewport_width}x{viewport_height}')
+    logger.info(f'视口尺寸: {viewport_width}x{viewport_height}')
 
-        # 2. 将模型返回的归一化坐标(0-1000)转换为视口像素坐标
-        if len(position) == 4:
-            # 模型返回的是 0-1000 范围的归一化坐标，转换为视口像素坐标
-            x_min = int(position[0] * viewport_width / 1000)
-            y_min = int(position[1] * viewport_height / 1000)
-            x_max = int(position[2] * viewport_width / 1000)
-            y_max = int(position[3] * viewport_height / 1000)
+    # 2. 将模型返回的归一化坐标(0-1000)转换为视口像素坐标
+    if len(position) == 4:
+        # 模型返回的是 0-1000 范围的归一化坐标，转换为视口像素坐标
+        x_min = int(position[0] * viewport_width / 1000)
+        y_min = int(position[1] * viewport_height / 1000)
+        x_max = int(position[2] * viewport_width / 1000)
+        y_max = int(position[3] * viewport_height / 1000)
 
-            logger.info(
-                f'归一化坐标: {position} -> 视口像素坐标: [{x_min}, {y_min}, {x_max}, {y_max}]')
+        logger.info(
+            f'归一化坐标: {position} -> 视口像素坐标: [{x_min}, {y_min}, {x_max}, {y_max}]')
 
-            # 计算中心点
-            center_x = int((x_min + x_max) / 2)
-            center_y = int((y_min + y_max) / 2)
+        # 计算中心点
+        center_x = int((x_min + x_max) / 2)
+        center_y = int((y_min + y_max) / 2)
 
-            logger.info(f'点击中心点: ({center_x}, {center_y})')
+        logger.info(f'点击中心点: ({center_x}, {center_y})')
 
-            return [center_x, center_y]
-        else:
-            logger.error(f'position格式错误: {position}')
-            return []
-
-    except Exception as e:
-        logger.exception(f'获取视口坐标异常', e)
+        return [center_x, center_y]
+    else:
+        logger.error(f'position格式错误: {position}')
         return []

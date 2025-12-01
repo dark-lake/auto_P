@@ -2,6 +2,7 @@ import json
 import os
 import sys
 
+from my_exceptions.MyBaseException import MyBaseException, MyBaseExceptionCode
 from utils.logger_util import logger
 
 
@@ -66,7 +67,7 @@ async def get_config(file_path: str) -> dict:
     import aiofiles
     if not os.path.exists(file_path):
         logger.info(f'配置文件不存在: {file_path}')
-        return {}
+        raise MyBaseException(MyBaseExceptionCode.CONFIG_NOT_EXIST, f'配置文件{file_path}不存在')
     async with aiofiles.open(file_path, 'r') as f:
         config = await f.read()
         return json.loads(config)

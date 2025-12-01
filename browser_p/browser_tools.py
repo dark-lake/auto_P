@@ -5,7 +5,8 @@ from mcp.server.fastmcp import FastMCP
 from playwright.async_api import async_playwright
 
 import MyPage
-from BrowserContextManager import browser_context_manager, MyWebpage
+from BrowserContextManager import browser_context_manager
+from my_exceptions.MyBaseException import MyBaseException
 from utils import os_util
 from utils.logger_util import logger
 
@@ -113,17 +114,18 @@ async def click_element(page_name: str, element_desc: str, detail: int = 0) -> s
     if not page:
         logger.info(f'未获取到{page_name}页面对象')
         return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
-
-    new_page = await page.mouse_click(element_desc, detail)
-    if isinstance(new_page, MyWebpage):
+    try:
+        new_page = await page.mouse_click(element_desc, detail)
         logger.info(f'已完成{element_desc}元素点击,精度为{'高' if detail else '标准'}')
-        return f'已完成{element_desc}元素点击,点击后打开的新页面名称为:{new_page.page_name}.采用的点击精度为{'高' if detail else '标准'}'
-    elif isinstance(new_page, str):
-        # 异常信息
-        return new_page
-    else:
-        # 返回None的情况
-        return f'点击{element_desc}元素成功'
+        if new_page:
+            return f'已完成{element_desc}元素点击,点击后打开的新页面名称为:{new_page.page_name}.采用的点击精度为{'高' if detail else '标准'}'
+        else:
+            # 返回None的情况,未打开新页面,但是点击成功
+            return f'点击{element_desc}元素成功'
+    except MyBaseException as be:
+        return f'{be.message}'
+    except Exception as e:
+        return f'点击元素失败,请检查元素描述是否正确,错误信息为:{type(e).__name__}'
 
 
 @mcp.tool(
@@ -255,15 +257,20 @@ async def fill_input_element(page_name: str, element_desc: str, value: str) -> s
         logger.info(f'填充{element_desc}-{value}时未获取到页面对象')
         return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
 
-    # 填充输入框, 先通过键盘输入,如果不成功再改用locator方式输入
-    if await page.fill_input_element_by_keyboard(element_desc, value):
+    try:
+        # 填充输入框, 先通过键盘输入,如果不成功再改用locator方式输入
+        await page.fill_input_element_by_keyboard(element_desc, value)
         logger.info(f'[键盘方式]已输入{element_desc}元素值为:{value}')
         return f'已输入{element_desc}元素值为:{value}'
-    if await page.fill_input_element_by_locator(element_desc, value):
-        logger.info(f'[locator方式]已输入{element_desc}元素值为:{value}')
-        return f'已输入{element_desc}元素值为:{value}'
+        # if await page.fill_input_element_by_locator(element_desc, value):
+        #     logger.info(f'[locator方式]已输入{element_desc}元素值为:{value}')
+        #     return f'已输入{element_desc}元素值为:{value}'
 
-    return f'{element_desc}元素填充{value}失败'
+        # return f'{element_desc}元素填充{value}失败'
+    except MyBaseException as e:
+        return f'{e.message}'
+    except Exception as e:
+        return f'填充{element_desc}-{value}时出现异常,异常为:{type(e).__name__}'
 
 
 @mcp.tool(
@@ -285,16 +292,18 @@ async def press_keyboard(page_name: str, key: str) -> str:
     if not page:
         logger.info(f'按键{key}时未获取到{page_name}页面对象')
         return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
-    new_page = await page.keyboard_press(key)
-    if isinstance(new_page, MyWebpage):
-        logger.info(f'已按压{key}按键,新打开的页面名称为:{new_page.page_name}')
-        return f'已按压{key}按键,新打开的页面名称为:{new_page.page_name}'
-    elif isinstance(new_page, str):
-        # 返回错误信息
-        return new_page
-    else:
-        logger.info(f'已按压{key}按键')
-        return f'已按压{key}按键'
+    try:
+        new_page = await page.keyboard_press(key)
+        if new_page:
+            logger.info(f'已按压{key}按键,新打开的页面名称为:{new_page.page_name}')
+            return f'已按压{key}按键,新打开的页面名称为:{new_page.page_name}'
+        else:
+            logger.info(f'已按压{key}按键')
+            return f'已按压{key}按键'
+    except MyBaseException as e:
+        return f'{e.message}'
+    except Exception as e:
+        return f'按键{key}时出现异常,异常为:{type(e).__name__}'
 
 
 @mcp.tool(
@@ -314,8 +323,12 @@ async def get_page_snapshot(page_name: str) -> str:
     if not page:
         logger.info(f'获取{page_name}页面快照时未获取到页面对象')
         return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
-    logger.info(f'已获取{page.page_name}页面快照')
-    return f'{await page.get_snapshot_base64('快照')}'
+    else:
+        logger.info(f'已获取{page.page_name}页面快照')
+    try:
+        return await page.get_snapshot_base64('快照')
+    except MyBaseException as e:
+        return f'{e.message}'
 
 
 @mcp.tool(
@@ -341,9 +354,8 @@ async def scroll_page(page_name: str, x: int, y: int) -> str:
         await page.scroll_page(x, y)
         logger.info(f'已滚动{page.page_name}页面,x轴距离为:{x},y轴距离为:{y}')
         return f'已滚动{page.page_name}页面,x轴距离为:{x},y轴距离为:{y}'
-    except Exception as e:
-        logger.info(f'滚动{page.page_name}页面时发生错误:{e}')
-        return f'滚动{page.page_name}页面时发生错误:{type(e).__name__}'
+    except MyBaseException as e:
+        return f'{e.message}'
 
 
 @mcp.tool(
@@ -355,8 +367,13 @@ async def get_account_info() -> str:
     当你需要某个网站的用户信息时,该工具可以告诉你目前所有配置的网站的用户名与密码
     :return: 已配置的所有账户名和密码
     """
-    config = await os_util.get_config(os.getenv('ACCOUNT_INFO'))
-    return f'已配置的账户信息为:{config}'
+    try:
+        config = await os_util.get_config(os.getenv('ACCOUNT_INFO'))
+        return f'已配置的账户信息为:{config}'
+    except MyBaseException as e:
+        return f'{e.message}'
+    except Exception as e:
+        return f'获取账户信息时出现异常,异常为:{type(e).__name__}'
 
 
 def check_status() -> bool:

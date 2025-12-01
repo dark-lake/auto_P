@@ -23,5 +23,5 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["browser_p*", "mcp*", "doc_p*", "utils*"]
+include = ["browser_p*", "mcp*", "doc_p*", "utils*", "my_exceptions*"]
 exclude = ["logs*", "*.egg-info", ".git*", ".venv*", "__pycache__*"]
