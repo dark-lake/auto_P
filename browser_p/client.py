@@ -15,6 +15,24 @@ from utils.logger_util import logger
 load_dotenv()  # load environment variables from .env
 
 
+async def reduce_messages(messages: list[dict], max_length: int = 4) -> list[dict]:
+    """
+    保持messages的长度始终小于等于max_length
+    :param messages: 对话列表
+    :param max_length: 限定的最长上下文
+    :return: 优化后的messages
+    """
+    if len(messages) <= max_length:
+        return messages
+
+    new_messages = []
+    # 超过max_length, 则删除最老几条的tool
+    first_msg = messages[0]
+    new_messages.append(first_msg)
+    new_messages.extend(messages[len(messages) - max_length + 1:])
+    return new_messages
+
+
 class Agent:
     def __init__(self):
         # Initialize session and client objects
@@ -87,7 +105,7 @@ class Agent:
                 final_text.append(message.content)
 
             if hasattr(message, "tool_calls") and message.tool_calls:
-                print('-'*20)
+                print('-' * 20)
                 for i in message.tool_calls:
                     print(f'\tID:{i.id}\n\tFUNCTION:{i.function}')
                 print('-' * 20)
@@ -137,10 +155,17 @@ class Agent:
                         logger.info(f'Message: {msg}')
                     else:
                         copy_msg = deepcopy(msg)
-                        img_data = copy_msg.get('content')[0]  # 字符串
-                        img_data['image_url'][
-                            'url'] = f'base64太长,展示其长度即可:{str(len(img_data['image_url'].get('url', '')))}'
-                        logger.info(f'Message: {copy_msg}')
+                        img_data = copy_msg.get('content')
+                        if isinstance(img_data, list):
+                            img_data[0]['image_url'][
+                                'url'] = f'图片base64长度为:{str(len(img_data[0]['image_url'].get('url', '')))}'
+                            logger.info(f'Message: {copy_msg}')
+                        else:
+                            logger.info(f'Message: {msg}')
+
+                # 减少无用token,当messages的长度达到4轮的时候,就只保留user和其他的tool_result,始终保持在4轮会话
+                # messages = await reduce_messages(messages)
+                logger.info(f'Messages轮数: {str(len(messages))}')
                 # 继续下一轮 LLM 推理
                 continue
             else:
@@ -169,7 +194,6 @@ class Agent:
             }
         } for tool in response.tools]
         return available_tools
-
 
     async def chat_loop(self):
         """Run an interactive chat loop"""
@@ -209,5 +233,6 @@ async def main():
 
 if __name__ == "__main__":
     import sys
+
     print(sys.path)
     asyncio.run(main())
