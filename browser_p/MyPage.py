@@ -452,8 +452,8 @@ async def get_element_position_by_model(messages: list[dict]) -> 'Bbox|None':
     :return: bbox数组
     """
     client = AsyncOpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_URL"),
+        api_key=os.getenv("VIS_API_KEY"),
+        base_url=os.getenv("VIS_BASE_URL"),
         timeout=120,
     )
 
@@ -461,7 +461,7 @@ async def get_element_position_by_model(messages: list[dict]) -> 'Bbox|None':
         response = await client.chat.completions.parse(
             model=os.getenv("VIS_OPEN_MODEL"),
             messages=messages,
-            response_format=Bbox,  # 指定响应解析模型
+            response_format=Bbox,
             top_p=0.3,
             extra_body={
                 "thinking": {
@@ -473,7 +473,7 @@ async def get_element_position_by_model(messages: list[dict]) -> 'Bbox|None':
         logger.info(f'视觉模型处理结果: {response.choices[0].message}')
         model_res = response.choices[0].message.parsed
         logger.info(f'视觉模型处理结果: {model_res}')
-        return model_res if model_res else None
+        return model_res.bbox if model_res.bbox else []
     except Exception as e:
         logger.exception(f'视觉模型处理异常', e)
         raise MyBaseException(MyBaseExceptionCode.MODEL_FAILED, f'视觉模型处理异常')
@@ -534,16 +534,16 @@ async def get_element_xpath_by_model(messages: list[dict]) -> str:
     :return: xpath
     """
     client = AsyncOpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_URL"),
+        api_key=os.getenv("VIS_API_KEY"),
+        base_url=os.getenv("VIS_BASE_URL"),
         timeout=120,
     )
 
     try:
         response = await client.chat.completions.parse(
-            model=os.getenv("OPENAI_MODEL"),
+            model=os.getenv("VIS_OPEN_MODEL"),
             messages=messages,
-            response_format=XpathStr,  # 指定响应解析模型
+            response_format=XpathStr,
             top_p=0.3,
             extra_body={
                 "thinking": {
@@ -560,7 +560,7 @@ async def get_element_xpath_by_model(messages: list[dict]) -> str:
         raise MyBaseException(MyBaseExceptionCode.MODEL_FAILED, f'大模型回答异常')
 
 
-async def get_relative_position(my_page: MyWebpage, position: Bbox | None) -> list[int]:
+async def get_relative_position(my_page: MyWebpage, position: list[int]) -> list[int]:
     """
     获取视口坐标（当截图为 full_page=False 时，模型返回的坐标已经是视口坐标）
     :param my_page: 页面对象
@@ -581,10 +581,10 @@ async def get_relative_position(my_page: MyWebpage, position: Bbox | None) -> li
     # 2. 将模型返回的归一化坐标(0-1000)转换为视口像素坐标
     if position:
         # 模型返回的是 0-1000 范围的归一化坐标，转换为视口像素坐标
-        x_min = int(position.x_min * viewport_width / 1000)
-        y_min = int(position.y_min * viewport_height / 1000)
-        x_max = int(position.x_max * viewport_width / 1000)
-        y_max = int(position.y_max * viewport_height / 1000)
+        x_min = int(position[0] * viewport_width / 1000)
+        y_min = int(position[1] * viewport_height / 1000)
+        x_max = int(position[2] * viewport_width / 1000)
+        y_max = int(position[3] * viewport_height / 1000)
 
         logger.info(
             f'归一化坐标: {position} -> 视口像素坐标: [{x_min}, {y_min}, {x_max}, {y_max}]')

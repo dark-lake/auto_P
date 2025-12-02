@@ -38,7 +38,11 @@ class Agent:
         # Initialize session and client objects
         self.session: Optional[ClientSession] = None
         self.exit_stack = AsyncExitStack()
-        self.openai = OpenAI()
+        self.openai = OpenAI(
+            api_key=os.getenv("CHAT_API_KEY"),
+            base_url=os.getenv("CHAT_BASE_URL"),
+            timeout=120,
+        )
 
     async def connect_to_server(self, server_script_path: str):
         """Connect to an MCP server
@@ -87,7 +91,7 @@ class Agent:
         while True:
             msg_len = len(messages)
             response = self.openai.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL"),
+                model=os.getenv("CHAT_OPEN_MODEL"),
                 messages=messages,
                 extra_body={
                     "thinking": {
