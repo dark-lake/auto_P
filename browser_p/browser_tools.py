@@ -348,6 +348,34 @@ async def get_account_info() -> str:
         return f'获取账户信息时出现异常,异常为:{type(e).__name__}'
 
 
+@mcp.tool(
+    name="wait_time",
+    description="等待指定时间"
+)
+async def wait_time(page_name: str, time_wait: int) -> str:
+    """
+    等待指定时间
+    :param page_name: 页面名称
+    :param time_wait: 等待时间,单位是秒,比如1表示1秒
+    :return: 是否等待成功
+    """
+
+    if not check_status():
+        return f'浏览器未启动,请先启动浏览器'
+    browser_context = await browser_context_manager.get_browser_context()
+    page = await browser_context.get_page_by_name(page_name)
+    if not page:
+        logger.info(f'等待{page_name}页面时未获取到页面对象')
+        return f'未获取到{page_name}页面对象,请先获取所有页面名称确认是否有你需要的页面'
+
+    try:
+        await page.wait_time(time_wait)
+        logger.info(f'已等待{time_wait}秒')
+        return f'已等待{time_wait}秒'
+    except MyBaseException as e:
+        return f'{e.message}'
+
+
 def check_status() -> bool:
     """
     检查浏览器上下文管理以及浏览器上下文对象是否存在

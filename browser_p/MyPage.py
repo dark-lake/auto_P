@@ -350,6 +350,17 @@ class MyWebpage:
             logger.exception(f'鼠标移动异常', e)
             raise MyBaseException(MyBaseExceptionCode.SCROLL_FAILED, f'{self.page_name} 鼠标滚轮异常')
 
+    async def wait_time(self, wait_time: int) -> None:
+        """
+        等待指定时间
+        :param wait_time: 等待时间,单位秒
+        :return:
+        """
+        try:
+            await self.page.wait_for_timeout(wait_time * 1000)
+        except Exception as e:
+            logger.exception(f'{self.page_name}页面等待{wait_time}秒时发生异常', e)
+            raise MyBaseException(MyBaseExceptionCode.WAIT_TIME_FAILED, f'等待{wait_time}秒时发生异常')
 
 async def get_html_by_position(my_page: MyWebpage, position: dict[str, int]) -> str:
     """

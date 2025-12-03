@@ -11,6 +11,7 @@ class MyBaseExceptionCode:
     SNAPSHOT_FAILED = 504  # 截图失败
     MODEL_FAILED = 505  # 大模型处理失败
     KEYBOARD_PRESS_FAILED = 506  # 键盘按键失败
+    WAIT_TIME_FAILED = 507  # 等待时间失败
 
     CONFIG_NOT_EXIST = 600  # 配置文件不存在
 
