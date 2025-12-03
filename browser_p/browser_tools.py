@@ -67,34 +67,6 @@ async def close_browser() -> str:
         return '浏览器关闭失败'
 
 
-# @mcp.tool(
-#     name="do_operation_on_page",
-#     description="对被操作元素执行对应操作, 操作类型只支持:[点击,输入,清空]"
-# )
-async def do_operation(page_name: str, element_desc: str, operation: str, params: dict = None) -> str:
-    """
-    对页面的指定元素执行对应操作
-    :param element_desc: 被操作元素的名称或描述,应该是文字
-    :param page_name: 页面名称
-    :param operation: 对元素执行的操作,分别有[点击,输入,清空]
-    :param params: 此次操作可能需要的参数
-    """
-    if not check_status():
-        return f'浏览器未启动,请先启动浏览器'
-
-    browser_context = await browser_context_manager.get_browser_context()
-    page = await browser_context.get_page_by_name(page_name)
-
-    # 获取元素在页面中的位置信息
-    locator = await page.get_locator(element_desc)
-
-    if operation == '点击':
-        await locator.click()
-        return f'点击元素成功'
-
-    return f'操作元素失败'
-
-
 @mcp.tool(
     name="click_element",
     description="执行点击工具前先获取所有页面的名字,然后再执行点击工具, 如果点击2次后依然没有效果,那请将detail赋值为1,通常情况保持0即可"

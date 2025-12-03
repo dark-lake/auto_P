@@ -168,7 +168,10 @@ class BrowserContextManager:
         :return:
         """
         try:
+            await self.close_all_context()
+            self.browser_contexts.clear()
             await self.browser.close()
+            self.browser = None
             logger.info(f'成功关闭浏览器上下文对象')
         except Exception as e:
             logger.exception(f'浏览器上下文关闭过程异常', e)
