@@ -351,7 +351,7 @@ class MyWebpage:
             raise MyBaseException(MyBaseExceptionCode.SCROLL_FAILED, f'{self.page_name} 鼠标滚轮异常')
 
 
-async def get_html_by_position(my_page: MyWebpage, position: dict[str, int]) -> str:
+async def get_html_by_position(my_page: MyWebpage, position: list[int]) -> str:
     """
     根据坐标获取其局部html代码
     :param my_page: 页面对象
@@ -445,7 +445,7 @@ def remove_js_css_with_inline(html: str) -> str:
         return html
 
 
-async def get_element_position_by_model(messages: list[dict]) -> 'Bbox|None':
+async def get_element_position_by_model(messages: list[dict]) -> list[int]:
     """
     通过调用视觉大模型来获取元素的bbox属性,既x_min,y_min,x_max,y_max
     :param messages: 大模型的输入
