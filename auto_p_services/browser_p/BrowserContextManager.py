@@ -3,8 +3,8 @@ from typing import Optional
 
 from playwright.async_api import Browser, BrowserContext
 
-from MyPage import MyWebpage
-from utils.logger_util import logger
+from auto_p_utils.logger_util import logger
+from .MyPage import MyWebpage
 
 
 class MyBrowserContext:

@@ -2,8 +2,8 @@ import json
 import os
 import sys
 
-from my_exceptions.MyBaseException import MyBaseException, MyBaseExceptionCode
-from utils.logger_util import logger
+from auto_p_exceptions.MyBaseException import MyBaseException, MyBaseExceptionCode
+from auto_p_utils.logger_util import logger
 
 
 def get_os() -> int:

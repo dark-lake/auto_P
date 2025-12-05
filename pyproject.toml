@@ -10,7 +10,7 @@ dependencies = [
     "beautifulsoup4>=4.14.2",
     "loguru>=0.7.3",
     "lxml>=6.0.2",
-    "mcp>=1.22.0",
+    "mcp==1.23.0",
     "openai>=2.8.1",
     "opencv-python>=4.12.0.88",
     "playwright>=1.56.0",
@@ -23,5 +23,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["browser_p*", "mcp*", "doc_p*", "utils*", "my_exceptions*"]
+include = [
+    "auto_p_services*",
+    "auto_p_clients*",
+    "auto_p_agents*",
+    "auto_p_utils*",
+    "auto_p_exceptions*",
+]
 exclude = ["logs*", "*.egg-info", ".git*", ".venv*", "__pycache__*"]

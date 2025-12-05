@@ -1,5 +1,5 @@
 from BrowserSession import BrowserSession
-from utils.logger_util import logger
+from auto_p_utils.logger_util import logger
 
 
 class BrowserManager:

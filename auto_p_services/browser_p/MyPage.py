@@ -9,15 +9,15 @@ from dotenv import load_dotenv
 from playwright.async_api import Page, Response, Locator
 from playwright.async_api import TimeoutError
 
-from my_exceptions.MyBaseException import MyBaseException, MyBaseExceptionCode
+from auto_p_exceptions.MyBaseException import MyBaseException, MyBaseExceptionCode
 
 if TYPE_CHECKING:
     from BrowserContextManager import MyBrowserContext
-from utils.logger_util import logger
-from utils import os_util
+from auto_p_utils.logger_util import logger
+from auto_p_utils import os_util
 from openai import AsyncOpenAI
 import os
-from response_format import Bbox, XpathStr
+from .response_format import Bbox, XpathStr
 
 load_dotenv()
 

@@ -3,60 +3,40 @@ import json
 import os
 from contextlib import AsyncExitStack
 from copy import deepcopy
-from typing import Optional
 
 from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from openai import OpenAI
+from mcp.types import CallToolResult
+from openai import AsyncOpenAI
+from openai.types.beta.threads.runs import ToolCall
 
-from utils.logger_util import logger
+from auto_p_utils.logger_util import logger
 
 load_dotenv()  # load environment variables from .env
 
 
-async def reduce_messages(messages: list[dict], max_length: int = 4) -> list[dict]:
-    """
-    保持messages的长度始终小于等于max_length
-    :param messages: 对话列表
-    :param max_length: 限定的最长上下文
-    :return: 优化后的messages
-    """
-    if len(messages) <= max_length:
-        return messages
-
-    new_messages = []
-    # 超过max_length, 则删除最老几条的tool
-    first_msg = messages[0]
-    new_messages.append(first_msg)
-    new_messages.extend(messages[len(messages) - max_length + 1:])
-    return new_messages
-
-
-class Agent:
+class AutoProcessAgent:
     def __init__(self):
-        # Initialize session and client objects
-        self.session: Optional[ClientSession] = None
+        self.servers = {}  # 存所有 server session server_name -> server_session
+        self.tools = {}  # tool_name → server_name 映射
         self.exit_stack = AsyncExitStack()
-        self.openai = OpenAI(
+        self.openai = AsyncOpenAI(
             api_key=os.getenv("CHAT_API_KEY"),
             base_url=os.getenv("CHAT_BASE_URL"),
             timeout=120,
         )
 
-    async def connect_to_server(self, server_script_path: str):
-        """Connect to an MCP server
-
-        Args:
-            server_script_path: Path to the server script (.py or .js)
+    async def connect_to_server(self, name: str, server_script_path: str):
         """
-
-        assert logger is not None, "Logger not initialized"
-
+        链接到具体的mcp server
+        :param name: 服务名称
+        :param server_script_path: 服务脚本路径
+        """
         is_python = server_script_path.endswith('.py')
         is_js = server_script_path.endswith('.js')
         if not (is_python or is_js):
-            raise ValueError("Server script must be a .py or .js file")
+            raise ValueError("服务脚本必须是python或js文件")
 
         command = "python" if is_python else "node"
         server_params = StdioServerParameters(
@@ -66,31 +46,33 @@ class Agent:
         )
 
         stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
-        self.stdio, self.write = stdio_transport
-        self.session = await self.exit_stack.enter_async_context(ClientSession(self.stdio, self.write))
+        stdio, write = stdio_transport
+        session = await self.exit_stack.enter_async_context(ClientSession(stdio, write))
 
-        await self.session.initialize()
-
-        # List available tools
-        response = await self.session.list_tools()
+        await session.initialize()
+        response = await session.list_tools()
         tools = response.tools
-        print("\nConnected to server with tools:", [tool.name for tool in tools])
+        # 保存mcp服务
+        self.servers[name] = session
+        # 保存每个工具与其服务名的映射
+        for tool in tools:
+            self.tools[tool.name] = name
+        logger.info(f"{name}服务中工具列表(共{len(tools)}个)为:{[tool.name for tool in tools]}")
 
     async def process_query(self, query: str) -> str:
-        """Process a query using LLM and available tools"""
         messages = [
             {
                 "role": "user",
                 "content": query
             }
         ]
-        # Initial LLM API call
 
+        # 构建工具schema
         tools = await self.build_tools_schema()
 
         while True:
             msg_len = len(messages)
-            response = self.openai.chat.completions.create(
+            response = await self.openai.chat.completions.create(
                 model=os.getenv("CHAT_OPEN_MODEL"),
                 messages=messages,
                 extra_body={
@@ -101,10 +83,9 @@ class Agent:
                 },
                 tools=tools
             )
-            # Process response and handle tool calls
+
             final_text = []
             message = response.choices[0].message
-            logger.info(f'Message: {response}')
             if len(message.content) > 0:
                 final_text.append(message.content)
 
@@ -129,7 +110,8 @@ class Agent:
                     tool_args = json.loads(tool_call.function.arguments)
                     final_text.append(f"[Calling tool {tool_name} with args {tool_args}]")
                     # 执行工具
-                    result = await self.session.call_tool(tool_name, tool_args)
+                    result = await self.execute_tool(tool_call)
+                    logger.info(f"工具 {tool_name} 结果为: {result}")
                     tool_output = result.structuredContent
                     final_text.append(f"[Tool {tool_name} result: {tool_output}]")
 
@@ -180,8 +162,57 @@ class Agent:
 
         return "\n".join(final_text)
 
+    async def execute_tool(self, tool_call: ToolCall) -> CallToolResult:
+        """
+        实际执行tool的方法
+        :return: 方法执行的结果
+        """
+        tool_name = tool_call.function.name
+        tool_args = json.loads(tool_call.function.arguments)
+
+        server_name = self.tools.get(tool_name, '')
+        server: ClientSession = self.servers.get(server_name, None)
+        if server is None:
+            return CallToolResult(
+                content=[],
+                structuredContent={
+                    "result": f'未找到{tool_name}工具',
+                }
+            )
+        logger.info(f"正在执行 {server_name} 服务的 {tool_name} 工具")
+        if tool_name == 'pause_and_wait':
+            pause_reason = tool_args.get('pause_reason', None)
+            print("模型要求暂停 → 等待你的操作")
+            print(f"暂停原因:{pause_reason}")
+            if tool_args.get('input_required', False):
+                # 这里暂停，让你操作
+                loop = asyncio.get_event_loop()
+                user_input = await loop.run_in_executor(None, input, "请输入你的操作指令后继续:")
+
+                return CallToolResult(
+                    content=[],
+                    structuredContent={
+                        "type": "pause",
+                        "reason": pause_reason,
+                        "result": user_input if user_input else "",
+                    }
+                )
+        try:
+            return await server.call_tool(tool_name, tool_args)
+        except Exception as e:
+            return CallToolResult(
+                content=[],
+                structuredContent={"result": str(e)}
+            )
+
     async def build_tools_schema(self) -> list[dict]:
-        response = await self.session.list_tools()
+        tools = []
+        # server为ClientSession对象
+        for server in self.servers.values():
+            # 这里拿到的resp中
+            resp = await server.list_tools()
+            tools.extend(dict(resp).get("tools", []))
+        logger.info(f"可用工具: {len(tools)}")
         available_tools = [{
             "type": "function",
             "function": {
@@ -198,47 +229,25 @@ class Agent:
                     "required": tool.inputSchema.get('required', [])
                 }
             }
-        } for tool in response.tools]
+        } for tool in tools]
         return available_tools
 
     async def chat_loop(self):
-        """Run an interactive chat loop"""
-        print("\nMac Agent Started!")
-        print("Type your queries or 'quit' to exit.")
+        print("\nAutoPAgent Started!")
+        print("提问或输入quit退出!")
 
         while True:
             try:
-                query = input("\nQuery: ").strip()
+                query = input("\n提问: ").strip()
 
                 if query.lower() == 'quit':
-                    # 关闭日志
-                    await logger.complete()
                     break
 
                 response = await self.process_query(query)
                 print("\n" + response)
 
             except Exception as e:
-                print(f"\nError: {str(e)}")
+                logger.error(e)
 
     async def cleanup(self):
-        """Clean up resources"""
         await self.exit_stack.aclose()
-
-
-async def main():
-    client = Agent()
-    try:
-        print("Connecting to server: ", "browser_tools.py")
-        await client.connect_to_server("browser_tools.py")
-        print("Connected to server!")
-        await client.chat_loop()
-    finally:
-        await client.cleanup()
-
-
-if __name__ == "__main__":
-    import sys
-
-    print(sys.path)
-    asyncio.run(main())

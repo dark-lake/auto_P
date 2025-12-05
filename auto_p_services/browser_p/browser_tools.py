@@ -6,9 +6,9 @@ from playwright.async_api import async_playwright
 
 import MyPage
 from BrowserContextManager import browser_context_manager
-from my_exceptions.MyBaseException import MyBaseException
-from utils import os_util
-from utils.logger_util import logger
+from auto_p_exceptions.MyBaseException import MyBaseException
+from auto_p_utils import os_util
+from auto_p_utils.logger_util import logger
 
 load_dotenv()
 

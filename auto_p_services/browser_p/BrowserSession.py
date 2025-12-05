@@ -1,7 +1,10 @@
 import uuid
-from utils.logger_util import logger
+
 from playwright.async_api import Browser
+
 from MyPage import MyWebpage
+from auto_p_utils.logger_util import logger
+
 
 class BrowserSession:
     """
