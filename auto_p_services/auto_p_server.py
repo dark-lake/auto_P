@@ -1,5 +1,8 @@
+from typing import Any
+
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult
 
 load_dotenv()
 
@@ -26,6 +29,16 @@ async def pause_and_wait(pause_reason: str, input_required: bool = True) -> str:
     """
     pass
 
+
+async def unified_output_func(tool_name: str, args: list[Any], output: CallToolResult) -> dict:
+    """
+    统一处理工具返回格式
+    :param tool_name: 工具名称
+    :param args: 入参
+    :param output: 输出
+    :return: 统一后返回格式
+    """
+    pass
 
 async def test():
     pass
