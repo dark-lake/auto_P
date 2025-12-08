@@ -6,7 +6,7 @@ from contextlib import AsyncExitStack
 from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, Tool
 from openai import AsyncOpenAI
 from openai.types.beta.threads.runs import ToolCall
 
@@ -67,9 +67,21 @@ class AutoProcessAgent:
                 "content": query
             }
         ]
+        if os.getenv('ENABLE_TOOL_SEARCH') == 'true':
+            # 构建全部工具的schema,只保留name和desc
+            tools = await self.build_tools_schema_lightweight()
+            system_prompt = {
+                "role": "system",
+                "content": (
+                    "当前用户已开启工具搜索模式, 我需要通过工具的名称和描述去搜索对应工具的具体信息后才能实际调用该工具"
+                )
+            }
+            messages.insert(0, system_prompt)
+        else:
+            # 构建全部工具的schema
+            tools = await self.build_tools_schema()
 
-        # 构建工具schema
-        tools = await self.build_tools_schema()
+        logger.info(f"工具列表({tools})")
 
         while True:
             msg_len = len(messages)
@@ -216,16 +228,47 @@ class AutoProcessAgent:
                 structuredContent={"result": str(e)}
             )
 
-    async def build_tools_schema(self) -> list[dict]:
+    async def build_tools_schema_lightweight(self) -> list[dict]:
+        """
+        构造轻量化tools的schema,只保留name和desc
+        :return: 工具
+        """
         tools = []
         # server为ClientSession对象
         for server in self.servers.values():
             # 这里拿到的resp中
             resp = await server.list_tools()
-            tools.extend(dict(resp).get("tools", []))
-        logger.info(f"可用工具: {len(tools)}")
+            temp = dict(resp).get("tools", [])
+            for tool in temp:
+                only_name_desc = Tool(
+                    name=tool.name,
+                    description=tool.description,
+                    inputSchema={}
+                )
+                tools.append(only_name_desc)
+        logger.info(f"可用工具(已启用工具搜索模式): {len(tools)}")
         available_tools = [convert_tool(tool) for tool in tools]
         return available_tools
+
+    async def build_tools_schema(self, tool_name: str = None) -> list[dict]:
+        # 当指定要调用的工具时,只返回该工具的schema
+        if tool_name:
+            server = self.servers.get(tool_name, None)
+            if server is None:
+                return []
+            resp = await server.list_tools()
+            tools = [dict(resp).get("tools", [])]
+            return [convert_tool(tool) for tool in tools if tool.name == tool_name]
+        else:
+            tools = []
+            # server为ClientSession对象
+            for server in self.servers.values():
+                # 这里拿到的resp中
+                resp = await server.list_tools()
+                tools.extend(dict(resp).get("tools", []))
+            logger.info(f"可用工具: {len(tools)}")
+            available_tools = [convert_tool(tool) for tool in tools]
+            return available_tools
 
     async def chat_loop(self):
         print("\nAutoPAgent Started!")
