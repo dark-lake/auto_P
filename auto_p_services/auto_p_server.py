@@ -1,12 +1,8 @@
-import json
 from typing import Any
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
-
-from auto_p_utils.logger_util import logger
-from auto_p_utils.os_util import convert_tool
 
 load_dotenv()
 
@@ -36,27 +32,15 @@ async def pause_and_wait(pause_reason: str, input_required: bool = True) -> str:
 
 @mcp.tool(
     name="tool_search",
-    description="根据工具名称和描述搜索工具,获取该工具的具体schema"
+    description="根据工具描述搜索工具,获取该工具的具体json schema"
 )
-async def tool_search(tool_name: str, desc: str) -> str:
+async def tool_search(tool_description: str) -> str:
     """
-    根据工具名称和参数搜索工具
-    :param tool_name: 工具名称
-    :param desc: 工具描述
-    :return: 该工具的schema
+    更具对工具的描述去搜索具体的工具
+    :param tool_description: 工具描述
+    :return: 该工具的json schema
     """
-    if os.getenv('ENABLE_TOOL_SEARCH') == 'false':
-        logger.info(f'用户未开启工具搜索模式')
-        return f'用户未开启工具搜索模式'
-
-    tools = await mcp.list_tools()
-
-    for tool in tools:
-        if tool['name'] == tool_name and tool['description'] == desc:
-            return f'该工具的schema为,请参考后调用:{json.dumps(convert_tool(tool))}'
-
-    logger.info(f'未找到 {tool_name} 工具, 工具描述为:{desc}')
-    return f'未找到该工具'
+    pass
 
 
 async def unified_output_func(tool_name: str, args: list[Any], output: CallToolResult) -> dict:
