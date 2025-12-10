@@ -91,7 +91,7 @@ class AutoProcessAgent:
             tools = await self.build_tools_schema_lightweight()
             system_prompt = {
                 "role": "system",
-                "content": auto_p_prompts.system_prompts_lightweight
+                "content": auto_p_prompts.system_prompts_tool_search
             }
             print(f'system_prompt: {system_prompt}')
             messages.insert(0, system_prompt)
@@ -136,7 +136,17 @@ class AutoProcessAgent:
                 for tool_call in message.tool_calls:
                     tool_call_id = tool_call.id
                     tool_name = tool_call.function.name
-                    tool_args = json.loads(tool_call.function.arguments)
+                    try:
+                        tool_args = json.loads(tool_call.function.arguments)
+                    except Exception as e:
+                        logger.info(f'工具{tool_name}参数解析异常: {e}')
+                        messages.append({
+                            "role": "tool",
+                            "name": tool_name,
+                            "content": f'工具{tool_name}参数解析异常: {e}',
+                            "tool_call_id": tool_call_id
+                        })
+                        continue
                     final_text.append(f"[Calling tool {tool_name} with args {tool_args}]")
                     # 执行工具
                     result = await self.execute_tool(tool_call)
