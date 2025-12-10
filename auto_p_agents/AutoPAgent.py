@@ -6,13 +6,15 @@ from contextlib import AsyncExitStack
 from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, Tool
 from openai import AsyncOpenAI
 from openai.types.beta.threads.runs import ToolCall
 
+import auto_p_prompts.auto_p_prompts as auto_p_prompts
 from auto_p_services.McpServiceManager import McpServiceManager
 from auto_p_utils.logger_util import logger
 from auto_p_utils.os_util import convert_tool
+from auto_p_vector.vector_processor import ToolSearcher
 
 load_dotenv()  # load environment variables from .env
 
@@ -22,6 +24,7 @@ class AutoProcessAgent:
         self.servers = {}  # 存所有 server session server_name -> server_session
         self.tools = {}  # tool_name → server_name 映射
         self.exit_stack = AsyncExitStack()
+        self.tool_searcher: ToolSearcher | None = None
         self.openai = AsyncOpenAI(
             api_key=os.getenv("CHAT_API_KEY"),
             base_url=os.getenv("CHAT_BASE_URL"),
@@ -60,6 +63,22 @@ class AutoProcessAgent:
                 self.tools[tool.name] = mcp_service.name
             logger.info(f"{mcp_service.name}服务中工具列表(共{len(tools)}个)为:{[tool.name for tool in tools]}")
 
+    async def init_tool_searcher(self):
+        # 构建工具搜索
+        if not self.tool_searcher:
+            logger.info(f'开始构建工具搜索器...')
+            # 构建工具搜索器
+            all_tools: list[Tool] = []
+            for service_name, session in self.servers.items():
+                if 'auto_p-tools' == service_name:
+                    continue
+                response = await session.list_tools()
+                all_tools.extend(response.tools)
+
+            self.tool_searcher = ToolSearcher(all_tools)
+            # 增量更新:检测工具的新增、修改、删除
+            await self.tool_searcher.sync_tools()
+
     async def process_query(self, query: str) -> str:
         messages = [
             {
@@ -72,16 +91,13 @@ class AutoProcessAgent:
             tools = await self.build_tools_schema_lightweight()
             system_prompt = {
                 "role": "system",
-                "content": (
-                    "当前用户已开启工具搜索模式, 需要通过tool_search工具来获取你想要的工具的json schema"
-                )
+                "content": auto_p_prompts.system_prompts_lightweight
             }
+            print(f'system_prompt: {system_prompt}')
             messages.insert(0, system_prompt)
         else:
             # 构建全部工具的schema
             tools = await self.build_tools_schema()
-
-        logger.info(f"工具列表({tools})")
 
         while True:
             msg_len = len(messages)
@@ -195,7 +211,7 @@ class AutoProcessAgent:
 
         server_name = self.tools.get(tool_name, '')
         server: ClientSession = self.servers.get(server_name, None)
-        if server is None:
+        if not server:
             return CallToolResult(
                 content=[],
                 structuredContent={
@@ -221,25 +237,24 @@ class AutoProcessAgent:
                     }
                 )
         elif 'tool_search' == tool_name and os.getenv('ENABLE_TOOL_SEARCH', 'false') == 'true':
-            tool_name = tool_args.get('tool_name', None)
-            if not tool_name:
+            tool_description = tool_args.get('tool_description', None)
+            if not tool_description:
                 return CallToolResult(
                     content=[],
                     structuredContent={
                         "type": "tool_search",
                         "tool_name": tool_name,
-                        "result": '参数tool_name不能为空',
+                        "result": '参数tool_description不能为空',
                     }
                 )
             # 有可能没找到
-            tool_schema = await self.tool_search(tool_name)
+            tool_schema = await self.tool_search(tool_description)
             return CallToolResult(
                 content=[],
                 structuredContent={
                     "type": "tool_search",
                     "tool_name": tool_name,
-                    "result": tool_schema if isinstance(tool_schema,
-                                                        dict) else f'未找到{tool_name}工具,请确定工具名称是否正确'
+                    "result": tool_schema if tool_schema else f'未找到该描述对应的工具, 描述:{tool_description}'
                 }
             )
 
@@ -315,13 +330,18 @@ class AutoProcessAgent:
     async def cleanup(self):
         await self.exit_stack.aclose()
 
-    async def tool_search(self, tool_name: str, tool_desc: str = None) -> dict:
+    async def tool_search(self, tool_desc: str = None) -> list[dict]:
         """
-        实际的搜索工具方法
-        :param tool_name: 工具名称
+        实际的搜索工具方法, 通过向量匹配的方式
         :param tool_desc: 工具描述
         :return: 工具的schema
         """
-        if self.tools.get(tool_name, None):
-            return convert_tool(self.tools.get(tool_name))
-        return {}
+        if not self.tool_searcher:
+            return []
+        # 小于等于3个匹配到的工具对象
+        tools = await self.tool_searcher.search(
+            query=tool_desc,
+            k=3
+        )
+        logger.info(f'搜索到如下工具: {[t.name for t in tools]}')
+        return [convert_tool(tool) for tool in tools]

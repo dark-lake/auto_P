@@ -43,6 +43,8 @@ async def main():
     client = AutoProcessAgent()
     try:
         await connect_by_config(client)
+        # 初始化工具搜索器
+        await client.init_tool_searcher()
         # 等待connect日志打印完成
         await asyncio.sleep(1)
         await client.chat_loop()
