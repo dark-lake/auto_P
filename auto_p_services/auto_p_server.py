@@ -43,6 +43,19 @@ async def tool_search(tool_description: str) -> str:
     pass
 
 
+@mcp.tool(
+    name="get_tool_schema",
+    description="根据工具名称检索并获取对应工具的完整 JSON Schema，且工具名称必须严格来源于轻量化工具列表"
+)
+async def get_tool_schema(tool_name: str) -> str:
+    """
+    获取工具json schema
+    :param tool_name: 工具名称
+    :return: 工具json schema
+    """
+    pass
+
+
 async def unified_output_func(tool_name: str, args: list[Any], output: CallToolResult) -> dict:
     """
     统一处理工具返回格式

@@ -117,3 +117,15 @@ def convert_tool(tool: Tool) -> Dict[str, Any]:
             }
         }
     }
+
+
+async def save_file(file_path: str, content: str) -> None:
+    """
+    保存文件
+    :param file_path: 文件路径
+    :param content: 文件内容
+    :return:
+    """
+    import aiofiles
+    async with aiofiles.open(file_path, "w", encoding='utf-8') as f_in:
+        await f_in.write(content)

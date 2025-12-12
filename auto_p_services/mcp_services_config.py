@@ -8,10 +8,10 @@ args 第一个必须是.py/.js文件的绝对路径, 所有参数添加到其后
 """
 mcp_service_manager = McpServiceManager(
     mcp_config={
-        # 浏览器
         "chrome-devtools": {
             "transport": "stdio",
             "command": "node",
+            "description": "浏览器自动化工具（如打开页面、跳转、输入、点击等）",
             # "unified_output_func": "",
             "args": [
                 "/Users/macbook0000/Downloads/chrome-devtools-mcp-chrome-devtools-mcp-v0.11.0/chrome-devtools-mcp-chrome-devtools-mcp-v0.11.0/build/src/index.js",
@@ -20,11 +20,13 @@ mcp_service_manager = McpServiceManager(
         },
         # "chrome-tools": {
         #     "transport": "stdio",
+        #     "description": "浏览器自动化工具（如打开页面、跳转、输入、点击等）",
         #     "command": "python",
         #     "args": ["/Users/macbook0000/PycharmProjects/auto_P/auto_p_services/browser_p_server.py"],
         # },
         "auto_p-tools": {
             "transport": "stdio",
+            "description": "官方提供工具(如工具搜索,暂停和等待)",
             "command": "python",
             "args": ["/Users/macbook0000/PycharmProjects/auto_P/auto_p_services/auto_p_server.py"],
         },

@@ -10,8 +10,10 @@ from mcp.types import CallToolResult, Tool
 from openai import AsyncOpenAI
 from openai.types.beta.threads.runs import ToolCall
 
-import auto_p_prompts.auto_p_prompts as auto_p_prompts
+from auto_p_prompts.prompts import auto_p_prompts as auto_p_prompts
+from auto_p_prompts.prompts_manager import PromptsManager
 from auto_p_services.McpServiceManager import McpServiceManager
+from auto_p_services.auto_p import auto_p_tools
 from auto_p_utils.logger_util import logger
 from auto_p_utils.os_util import convert_tool
 from auto_p_vector.vector_processor import ToolSearcher
@@ -22,8 +24,10 @@ load_dotenv()  # load environment variables from .env
 class AutoProcessAgent:
     def __init__(self):
         self.servers = {}  # 存所有 server session server_name -> server_session
+        self.servers_McpService: dict[str, McpServiceManager.McpService] = {}  # mcp服务列表 server_name -> McpService
         self.tools = {}  # tool_name → server_name 映射
         self.exit_stack = AsyncExitStack()
+        self.prompts_manager = PromptsManager()  # 提示词管理器,负责提示词的构建
         self.tool_searcher: ToolSearcher | None = None
         self.openai = AsyncOpenAI(
             api_key=os.getenv("CHAT_API_KEY"),
@@ -62,10 +66,12 @@ class AutoProcessAgent:
             for tool in tools:
                 self.tools[tool.name] = mcp_service.name
             logger.info(f"{mcp_service.name}服务中工具列表(共{len(tools)}个)为:{[tool.name for tool in tools]}")
+        # 将当前服务的McpService对象保存
+        self.servers_McpService[mcp_service.name] = mcp_service
 
     async def init_tool_searcher(self):
         # 构建工具搜索
-        if not self.tool_searcher:
+        if not self.tool_searcher and os.getenv("ENABLE_TOOL_SEARCH", "false") == "true":
             logger.info(f'开始构建工具搜索器...')
             # 构建工具搜索器
             all_tools: list[Tool] = []
@@ -88,10 +94,16 @@ class AutoProcessAgent:
         ]
         if os.getenv('ENABLE_TOOL_SEARCH') == 'true':
             # 构建全部工具的schema,只保留name和desc
-            tools = await self.build_tools_schema_lightweight()
+            tools, lightweight_tools = await self.build_tools_schema_lightweight()
+            # 构建工具描述
+            mcp_tool_descriptions = [f'- {mcp_service.description}' for mcp_service in self.servers_McpService.values()]
             system_prompt = {
                 "role": "system",
-                "content": auto_p_prompts.system_prompts_tool_search
+                "content": self.prompts_manager.build_prompt(
+                    auto_p_prompts.system_prompts_lightweight_V3,
+                    mcp_tool_descriptions='\n'.join(mcp_tool_descriptions),
+                    lightweight_tools=''.join(json.dumps(lightweight_tools))
+                )
             }
             print(f'system_prompt: {system_prompt}')
             messages.insert(0, system_prompt)
@@ -104,6 +116,8 @@ class AutoProcessAgent:
             response = await self.openai.chat.completions.create(
                 model=os.getenv("CHAT_OPEN_MODEL"),
                 messages=messages,
+                temperature=0.6,
+                top_p=0.95,
                 extra_body={
                     "thinking": {
                         "type": "disabled"  # 不使用深度思考能力
@@ -246,7 +260,27 @@ class AutoProcessAgent:
                         "result": user_input if isinstance(user_input, str) else "no input",
                     }
                 )
-        elif 'tool_search' == tool_name and os.getenv('ENABLE_TOOL_SEARCH', 'false') == 'true':
+        elif tool_name == 'get_tool_schema':
+            # 获取工具
+            need_tool_name = tool_args.get('tool_name', '')
+            server_name = self.tools.get(need_tool_name, None)
+            server: ClientSession = self.servers.get(server_name)
+            need_tool = await self.get_tool_from_session(need_tool_name, server)
+            if not need_tool:
+                logger.info(f'未找到工具:{need_tool_name}')
+                result = f'未找到工具:{need_tool_name}'
+            else:
+                logger.info(f'模型成功获取到工具:{need_tool_name}的json schema')
+                result = convert_tool(need_tool)
+            return CallToolResult(
+                content=[],
+                structuredContent={
+                    "type": "get_tool_schema",
+                    "tool_name": tool_name,
+                    "result": result
+                }
+            )
+        elif tool_name == 'tool_search' and os.getenv('ENABLE_TOOL_SEARCH', 'false') == 'true':
             tool_description = tool_args.get('tool_description', None)
             if not tool_description:
                 return CallToolResult(
@@ -267,6 +301,27 @@ class AutoProcessAgent:
                     "result": tool_schema if tool_schema else f'未找到该描述对应的工具, 描述:{tool_description}'
                 }
             )
+        elif server_name == 'chrome-devtools':
+            res = await server.call_tool(tool_name, tool_args)
+            temp = res.content[0] if res.content else None
+            if not temp:
+                return res
+            if tool_name != 'take_snapshot':
+                if temp.type == 'text':
+                    temp.text = temp.text.split("\n## Latest page snapshot")[0]
+                    logger.info(f'切割快照后结果:{temp.text}')
+                    return res
+                return res
+            else:
+                # take_snapshot
+                if temp.type == 'text':
+                    print(f'修改前长度:{len(temp.text)}')
+                    temp.text = await auto_p_tools.lightweight_ally(temp.text)
+                    print(
+                        f'修改后长度:{len(temp.text)},缩减了{str(round((len(temp.text) / len(res.content[0].text)) * 100, 2))}%')
+                    logger.info(f'已移除所有URL')
+                    return res
+                return res
 
         try:
             return await server.call_tool(tool_name, tool_args)
@@ -276,12 +331,28 @@ class AutoProcessAgent:
                 structuredContent={"result": str(e)}
             )
 
-    async def build_tools_schema_lightweight(self) -> list[dict]:
+    async def get_tool_from_session(self, tool_name: str, session: ClientSession = None) -> Tool | None:
+        """获取指定session中的指定Tool"""
+        if session:
+            all_tools = await session.list_tools()
+            for tool in all_tools.tools:
+                if tool.name == tool_name:
+                    return tool
+        else:
+            for server in self.servers.values():
+                all_tools = await server.list_tools()
+                for tool in all_tools.tools:
+                    if tool.name == tool_name:
+                        return tool
+        return None
+
+    async def build_tools_schema_lightweight(self) -> tuple[list[dict], list[dict]]:
         """
         构造轻量化tools的schema,只保留name和desc
         :return: 工具
         """
         tools = []
+        lightweight_tools = []
         # server为ClientSession对象
         for server_name, server in self.servers.items():
             resp = await server.list_tools()
@@ -289,17 +360,22 @@ class AutoProcessAgent:
             if 'auto_p-tools' == server_name:
                 # 如果是auto_p-tools的则返回完整的schema
                 tools.extend([*temp])
-            # else:
-            #     for tool in temp:
-            #         only_name_desc = Tool(
-            #             name=tool.name,
-            #             description=tool.description,
-            #             inputSchema={}
-            #         )
-            #         tools.append(only_name_desc)
+            else:
+                for tool in temp:
+                    # only_name_desc = Tool(
+                    #     name=tool.name,
+                    #     description=tool.description,
+                    #     inputSchema={}
+                    # )
+                    lightweight_tool = {
+                        "name": tool.name,
+                        "description": tool.description
+                    }
+                    lightweight_tools.append(lightweight_tool)
         logger.info(f"可用工具(已启用工具搜索模式): {len(tools)}")
+        logger.info(f"轻量化可用工具(已启用工具搜索模式): {len(lightweight_tools)}")
         available_tools = [convert_tool(tool) for tool in tools]
-        return available_tools
+        return available_tools, lightweight_tools
 
     async def build_tools_schema(self, tool_name: str = None) -> list[dict]:
         # 当指定要调用的工具时,只返回该工具的schema
