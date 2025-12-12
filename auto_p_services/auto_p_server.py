@@ -10,22 +10,20 @@ mcp = FastMCP("Auto_P Server")
 
 
 @mcp.tool(
-    name="pause_and_wait",
+    name="wait_for_user_input",
     description=(
             "当前任务无法继续、需要用户提供额外信息或确认某个操作时调用。本工具会暂停程序执行，"
             "等待用户输入或确认后再继续。如果模型在执行步骤时遇到不确定情况，例如："
-            "需要用户提供参数、需要人工检查某个元素是否存在、需要确认下一步是否继续，"
+            "需要用户提供参数、需要人工检查某、需要确认下一步是否继续，"
             "或任务本身要求用户做出选择时，应调用本工具。"
     )
 )
-async def pause_and_wait(pause_reason: str, input_required: bool = True) -> str:
+async def wait_for_user_input(pause_reason: str) -> str:
     """
     暂停当前流程以等待用户参与。例如需要用户手动检查页面内容、确认某个行为是否执行、
     或提供继续下一步所需的输入。在 pause_reason 中清晰描述暂停原因或需要的用户操作。
-
     :param pause_reason: 说明暂停目的，例如“请告诉我要搜索的关键词”或“请确认是否继续点击按钮”。
-    :param input_required: 如果需要用户输入内容则为 True；如果只需要用户点击确认继续，则为 False。
-    :return: 用户输入的内容，或空字符串（当 input_required=False 时）。
+    :return: 用户输入的内容。
     """
     pass
 
@@ -45,12 +43,12 @@ async def tool_search(tool_description: str) -> str:
 
 @mcp.tool(
     name="get_tool_schema",
-    description="根据工具名称检索并获取对应工具的完整 JSON Schema，且工具名称必须严格来源于轻量化工具列表"
+    description="根据工具名称检索并获取对应工具的完整 JSON Schema，且工具名称必须严格来源于轻量化工具列表, 一次性对多可以同时查询3个."
 )
-async def get_tool_schema(tool_name: str) -> str:
+async def get_tool_schema(tool_names: list[str]) -> str:
     """
-    获取工具json schema
-    :param tool_name: 工具名称
+    获取工具json schema,可以同时查询多个工具,一次性最多查询三个
+    :param tool_names: 多个工具的名称列表
     :return: 工具json schema
     """
     pass

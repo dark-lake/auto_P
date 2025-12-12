@@ -150,6 +150,7 @@ class AutoProcessAgent:
                 for tool_call in message.tool_calls:
                     tool_call_id = tool_call.id
                     tool_name = tool_call.function.name
+                    # 对工具参数检查,会出现非json的参数
                     try:
                         tool_args = json.loads(tool_call.function.arguments)
                     except Exception as e:
@@ -165,31 +166,7 @@ class AutoProcessAgent:
                     # 执行工具
                     result = await self.execute_tool(tool_call)
                     print(f'result: {result}')
-                    # tool_output = result.structuredContent if result.structuredContent else result.content
                     final_text.append(f"[Tool {tool_name} result: {result}]")
-
-                    # 对于图片类型,message需要特殊处理一下
-                    # if tool_output and tool_output.get('result', False) and tool_output.get('result').startswith(''):
-                    #     messages.append({
-                    #         "role": "tool",
-                    #         "name": tool_name,
-                    #         "content": [
-                    #             {
-                    #                 "type": "image_url",
-                    #                 "image_url": {
-                    #                     "url": tool_output.get('result', )
-                    #                 }
-                    #             }
-                    #         ],
-                    #         "tool_call_id": tool_call_id
-                    #     })
-                    # else:
-                    #     messages.append({
-                    #         "role": "tool",
-                    #         "name": tool_name,
-                    #         "content": str(tool_output.get('result', 'No result')),
-                    #         "tool_call_id": tool_call_id
-                    #     })
                     if result.content:
                         output = result.content[0]
                         if hasattr(output, 'model_dump'):
@@ -204,21 +181,8 @@ class AutoProcessAgent:
                     })
 
                 for msg in messages[msg_len:]:
-                    # if msg.get("name") != "get_page_snapshot":
-                    #     logger.info(f'Message: {msg}')
-                    # else:
-                    #     copy_msg = deepcopy(msg)
-                    #     img_data = copy_msg.get('content')
-                    #     if isinstance(img_data, list):
-                    #         img_data[0]['image_url'][
-                    #             'url'] = f'图片base64长度为:{str(len(img_data[0]['image_url'].get('url', '')))}'
-                    #         logger.info(f'Message: {copy_msg}')
-                    #     else:
-                    #         logger.info(f'Message: {msg}')
                     logger.info(f'Message: {msg}')
 
-                # 减少无用token,当messages的长度达到4轮的时候,就只保留user和其他的tool_result,始终保持在4轮会话
-                # messages = await reduce_messages(messages)
                 logger.info(f'Messages轮数: {str(len(messages))}')
                 # 继续下一轮 LLM 推理
                 continue
@@ -235,7 +199,6 @@ class AutoProcessAgent:
         """
         tool_name = tool_call.function.name
         tool_args = json.loads(tool_call.function.arguments)
-
         server_name = self.tools.get(tool_name, '')
         server: ClientSession = self.servers.get(server_name, None)
         if not server:
@@ -246,11 +209,11 @@ class AutoProcessAgent:
                 }
             )
         logger.info(f"正在执行 {server_name} 服务的 {tool_name} 工具")
-        if tool_name == 'pause_and_wait':
+        if tool_name == 'wait_for_user_input':
             pause_reason = tool_args.get('pause_reason', None)
             print("模型要求暂停 → 等待你的操作")
             print(f"暂停原因:{pause_reason}")
-            if tool_args.get('input_required', False):
+            if tool_args.get('input_required', True):  # 默认应该为True
                 # 这里暂停，让你操作
                 loop = asyncio.get_event_loop()
                 user_input = await loop.run_in_executor(None, input, "请输入你的操作指令后继续:")
@@ -264,25 +227,8 @@ class AutoProcessAgent:
                     }
                 )
         elif tool_name == 'get_tool_schema':
-            # 获取工具
-            need_tool_name = tool_args.get('tool_name', '')
-            server_name = self.tools.get(need_tool_name, None)
-            server: ClientSession = self.servers.get(server_name)
-            need_tool = await self.get_tool_from_session(need_tool_name, server)
-            if not need_tool:
-                logger.info(f'未找到工具:{need_tool_name}')
-                result = f'未找到工具:{need_tool_name}'
-            else:
-                logger.info(f'模型成功获取到工具:{need_tool_name}的json schema')
-                result = convert_tool(need_tool)
-            return CallToolResult(
-                content=[],
-                structuredContent={
-                    "type": "get_tool_schema",
-                    "tool_name": tool_name,
-                    "result": result
-                }
-            )
+            # 直接调用并等待结果，而不是创建任务后立即返回
+            return await auto_p_tools.do_get_tool_schema(self, tool_call)
         elif tool_name == 'tool_search' and os.getenv('ENABLE_TOOL_SEARCH', 'false') == 'true':
             tool_description = tool_args.get('tool_description', None)
             if not tool_description:
@@ -334,20 +280,22 @@ class AutoProcessAgent:
                 structuredContent={"result": str(e)}
             )
 
-    async def get_tool_from_session(self, tool_name: str, session: ClientSession = None) -> Tool | None:
+    async def get_tool_from_session(self, tool_names: set[str], session: ClientSession = None) -> list[Tool]:
         """获取指定session中的指定Tool"""
+        need_tools = []
         if session:
             all_tools = await session.list_tools()
             for tool in all_tools.tools:
-                if tool.name == tool_name:
-                    return tool
+                if tool.name in tool_names:
+                    need_tools.append(tool)
         else:
             for server in self.servers.values():
                 all_tools = await server.list_tools()
                 for tool in all_tools.tools:
-                    if tool.name == tool_name:
-                        return tool
-        return None
+                    if tool.name in tool_names:
+                        need_tools.append(tool)
+                        tool_names -= {tool.name}
+        return need_tools
 
     async def build_tools_schema_lightweight(self) -> tuple[list[dict], list[dict]]:
         """

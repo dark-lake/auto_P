@@ -1,12 +1,16 @@
 import asyncio
+import json
 import os
 import re
 from datetime import datetime
 
 import aiofiles
+from mcp.server.fastmcp.tools import Tool
+from mcp.types import CallToolResult
+from openai.types.beta.threads.runs import ToolCall
 
 from auto_p_utils.logger_util import logger
-from auto_p_utils.os_util import save_file
+from auto_p_utils.os_util import save_file, convert_tool
 
 
 def remove_urls_from_text(text: str) -> str:
@@ -78,6 +82,37 @@ async def lightweight_ally(ally_text: str) -> str:
     except Exception as e:
         logger.error(f'处理ally_text时出错: {e}')
         raise
+
+
+async def do_get_tool_schema(agent: 'AutoProcessAgent', tool_call: ToolCall) -> CallToolResult:
+    """
+    获取tool_names各工具的json schema
+    :param tool_call: 模型返回的工具调用对象
+    :param agent: auto_p_agent对象, 字典格式
+    :return: 工具的json schema
+    """
+    # 工具名称
+    tool_name = tool_call.function.name
+    # 参数
+    tool_args = json.loads(tool_call.function.arguments)
+    # 所需工具列表
+    need_tool_names: list[str] = tool_args.get('tool_names', '')
+    # 获取所需工具对象
+    need_tools: list[Tool] = await agent.get_tool_from_session(set(need_tool_names))
+    if not need_tools:
+        logger.info(f'未找到工具:{need_tool_names}')
+        result = f'未找到工具:{need_tool_names}'
+    else:
+        logger.info(f'模型成功获取到工具:{need_tool_names}的json schema')
+        result = [convert_tool(tool) for tool in need_tools]
+    return CallToolResult(
+        content=[],
+        structuredContent={
+            "type": "get_tool_schema",
+            "tool_name": tool_name,
+            "result": result
+        }
+    )
 
 
 if __name__ == "__main__":
