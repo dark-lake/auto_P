@@ -21,7 +21,8 @@ logger.add(
     retention="7 days",
     enqueue=True,
     format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-    mode='a'
+    mode='a',
+    encoding='utf-8'
 )
 
 # 检查是否作为 MCP server 运行 (通过 stdio 通信)

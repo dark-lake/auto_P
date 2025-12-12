@@ -190,13 +190,16 @@ class AutoProcessAgent:
                     #         "content": str(tool_output.get('result', 'No result')),
                     #         "tool_call_id": tool_call_id
                     #     })
-                    output = result.content[0] if result.content else result.structuredContent
-                    if hasattr(output, 'model_dump'):
-                        output = output.model_dump()
+                    if result.content:
+                        output = result.content[0]
+                        if hasattr(output, 'model_dump'):
+                            output = output.model_dump()
+                    else:
+                        output = result.structuredContent
                     messages.append({
                         "role": "tool",
                         "name": tool_name,
-                        "content": json.dumps(output),
+                        "content": json.dumps(output, ensure_ascii=False),  # 确保写入日志的中文是可读的
                         "tool_call_id": tool_call_id
                     })
 
@@ -309,7 +312,7 @@ class AutoProcessAgent:
             if tool_name != 'take_snapshot':
                 if temp.type == 'text':
                     temp.text = temp.text.split("\n## Latest page snapshot")[0]
-                    logger.info(f'切割快照后结果:{temp.text}')
+                    logger.info(f'切割快照后结果:{temp.text.replace("\n", " ")}')
                     return res
                 return res
             else:
