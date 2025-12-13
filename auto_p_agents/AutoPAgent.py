@@ -18,7 +18,7 @@ from auto_p_utils.logger_util import logger
 from auto_p_utils.os_util import convert_tool
 from auto_p_vector.vector_processor import ToolSearcher
 
-load_dotenv()  # load environment variables from .env
+load_dotenv()  # 加载环境变量 from .env
 
 
 class AutoProcessAgent:
@@ -214,30 +214,26 @@ class AutoProcessAgent:
             temp = res.content[0] if res.content else None
             if not temp:
                 return res
-            if tool_name != 'take_snapshot':
-                if temp.type == 'text':
-                    temp.text = temp.text.split("\n## Latest page snapshot")[0]
-                    logger.info(f'切割快照后结果:{temp.text.replace("\n", " ")}')
+            # 对工具返回结果中涉及A11Y结构的部分进行移除URL
+            if temp.type == 'text':
+                orig_length = len(temp.text)
+                resp_and_a11y_text = temp.text.split("\n## Latest page snapshot\n")
+                if len(resp_and_a11y_text) > 1:
+                    # 对a11y文本进行移除URL
+                    logger.info(f'移除URL前长度:{orig_length}')
+                    resp_and_a11y_text[1] = await auto_p_tools.lightweight_ally(resp_and_a11y_text[1])
+                    temp.text = '\n## Latest page snapshot\n'.join(resp_and_a11y_text)
+                    curr_length = len(temp.text)
+                    logger.info(
+                        f'移除URL后长度:{curr_length},缩减了{str(round(((orig_length - curr_length) / orig_length) * 100, 2))}%')
                     return res
-                return res
-            else:
-                # take_snapshot
-                if temp.type == 'text':
-                    print(f'修改前长度:{len(temp.text)}')
-                    temp.text = await auto_p_tools.lightweight_ally(temp.text)
-                    print(
-                        f'修改后长度:{len(temp.text)},缩减了{str(round((len(temp.text) / len(res.content[0].text)) * 100, 2))}%')
-                    logger.info(f'已移除所有URL')
-                    return res
-                return res
+            return res
 
         try:
             return await server.call_tool(tool_name, tool_args)
         except Exception as e:
-            return CallToolResult(
-                content=[],
-                structuredContent={"result": str(e)}
-            )
+            return await auto_p_tools.build_tool_result(f'调用{tool_name}工具异常,请分析异常后再进行下一步: {e}',
+                                                        tool_call)
 
     async def get_tool_from_session(self, tool_names: set[str], session: ClientSession = None) -> list[Tool]:
         """获取指定session中的指定Tool"""
@@ -272,11 +268,6 @@ class AutoProcessAgent:
                 tools.extend([*temp])
             else:
                 for tool in temp:
-                    # only_name_desc = Tool(
-                    #     name=tool.name,
-                    #     description=tool.description,
-                    #     inputSchema={}
-                    # )
                     lightweight_tool = {
                         "name": tool.name,
                         "description": tool.description
@@ -308,7 +299,7 @@ class AutoProcessAgent:
             return available_tools
 
     async def chat_loop(self):
-        print("\nAutoPAgent Started!")
+        print("\nAutoPAgent 启动!")
         print("提问或输入quit退出!")
 
         while True:
@@ -318,6 +309,7 @@ class AutoProcessAgent:
                 if query.lower() == 'quit':
                     break
 
+                # 直接await异步方法并显示结果
                 response = await self.process_query(query)
                 print("\n" + response)
             except Exception as e:
@@ -325,19 +317,3 @@ class AutoProcessAgent:
 
     async def cleanup(self):
         await self.exit_stack.aclose()
-
-    async def tool_search(self, tool_desc: str = None) -> list[dict]:
-        """
-        实际的搜索工具方法, 通过向量匹配的方式
-        :param tool_desc: 工具描述
-        :return: 工具的schema
-        """
-        if not self.tool_searcher:
-            return []
-        # 小于等于3个匹配到的工具对象
-        tools = await self.tool_searcher.search(
-            query=tool_desc,
-            k=3
-        )
-        logger.info(f'搜索到如下工具: {[t.name for t in tools]}')
-        return [convert_tool(tool) for tool in tools]
