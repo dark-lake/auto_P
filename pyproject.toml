@@ -34,5 +34,6 @@ include = [
     "auto_p_prompts*",
     "auto_p_exceptions*",
     "auto_p_vector*",
+    "auto_p_gui*",
 ]
 exclude = ["logs*", "*.egg-info", ".git*", ".venv*", "__pycache__*"]
