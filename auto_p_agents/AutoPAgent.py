@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 from contextlib import AsyncExitStack
@@ -210,24 +209,8 @@ class AutoProcessAgent:
             )
         logger.info(f"正在执行 {server_name} 服务的 {tool_name} 工具")
         if tool_name == 'wait_for_user_input':
-            pause_reason = tool_args.get('pause_reason', None)
-            print("模型要求暂停 → 等待你的操作")
-            print(f"暂停原因:{pause_reason}")
-            if tool_args.get('input_required', True):  # 默认应该为True
-                # 这里暂停，让你操作
-                loop = asyncio.get_event_loop()
-                user_input = await loop.run_in_executor(None, input, "请输入你的操作指令后继续:")
-
-                return CallToolResult(
-                    content=[],
-                    structuredContent={
-                        "type": "pause",
-                        "reason": pause_reason,
-                        "result": user_input if isinstance(user_input, str) else "no input",
-                    }
-                )
+            return await auto_p_tools.do_wait_for_user_input(tool_call)
         elif tool_name == 'get_tool_schema':
-            # 直接调用并等待结果，而不是创建任务后立即返回
             return await auto_p_tools.do_get_tool_schema(self, tool_call)
         elif tool_name == 'tool_search' and os.getenv('ENABLE_TOOL_SEARCH', 'false') == 'true':
             tool_description = tool_args.get('tool_description', None)
