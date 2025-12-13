@@ -127,5 +127,11 @@ async def save_file(file_path: str, content: str) -> None:
     :return:
     """
     import aiofiles
+    import os
+    # 确保目录存在
+    directory = os.path.dirname(file_path)
+    if directory and not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
+    
     async with aiofiles.open(file_path, "w", encoding='utf-8') as f_in:
         await f_in.write(content)

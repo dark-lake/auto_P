@@ -207,7 +207,7 @@ class AutoProcessAgent:
         logger.info(f"正在执行 {server_name} 服务的 {tool_name} 工具")
         special_method: Callable = auto_p_tools.special_methods.get(tool_name)
         if special_method:
-            logger.info(f'正在执行特殊方法 {tool_name}-{special_method.__doc__} ')
+            logger.info(f'正在执行特殊方法 {tool_name}')
             return await special_method(self, tool_call)
         elif server_name == 'chrome-devtools':
             res = await server.call_tool(tool_name, tool_args)
