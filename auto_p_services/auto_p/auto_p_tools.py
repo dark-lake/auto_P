@@ -15,6 +15,18 @@ from auto_p_utils.logger_util import logger
 from auto_p_utils.os_util import save_file, convert_tool
 
 
+async def build_tool_result(result: str | list, tool_call: ToolCall) -> CallToolResult:
+    # 工具名称
+    return CallToolResult(
+        content=[],
+        structuredContent={
+            "type": "text" if isinstance(result, str) else "list",
+            "tool_name": tool_call.function.name,
+            "result": result
+        }
+    )
+
+
 def remove_urls_from_text(text: str) -> str:
     """从文本中移除所有URL"""
     # 匹配URL的正则表达式
@@ -93,8 +105,6 @@ async def do_get_tool_schema(agent: 'AutoProcessAgent', tool_call: ToolCall) -> 
     :param agent: auto_p_agent对象, 字典格式
     :return: 工具的json schema
     """
-    # 工具名称
-    tool_name = tool_call.function.name
     # 参数
     tool_args = json.loads(tool_call.function.arguments)
     # 所需工具列表
@@ -107,20 +117,14 @@ async def do_get_tool_schema(agent: 'AutoProcessAgent', tool_call: ToolCall) -> 
     else:
         logger.info(f'模型成功获取到工具:{need_tool_names}的json schema')
         result = [convert_tool(tool) for tool in need_tools]
-    return CallToolResult(
-        content=[],
-        structuredContent={
-            "type": "get_tool_schema",
-            "tool_name": tool_name,
-            "result": result
-        }
-    )
+    return await build_tool_result(result, tool_call)
 
 
-async def do_wait_for_user_input(tool_call: ToolCall) -> CallToolResult:
+async def do_wait_for_user_input(agent: 'AutoProcessAgent', tool_call: ToolCall) -> CallToolResult:
     """
     等待用户输入
     :param tool_call: 模型返回的工具调用对象
+    :param agent: auto_p_agent对象, 字典格式
     :return: 用户输入
     """
     # 参数
@@ -199,15 +203,52 @@ async def do_wait_for_user_input(tool_call: ToolCall) -> CallToolResult:
         # 最后的回退方案
         user_input = await loop.run_in_executor(None, input, f"暂停原因: {pause_reason}\n请输入你的操作指令:")
 
-    return CallToolResult(
-        content=[],
-        structuredContent={
-            "type": "pause",
-            "reason": pause_reason,
-            "result": user_input,
-        }
-    )
+    return await build_tool_result(user_input, tool_call)
 
+
+async def do_tool_search(agent: 'AutoProcessAgent', tool_call: ToolCall) -> CallToolResult:
+    """
+    实际的搜索工具方法, 通过向量匹配的方式
+    :param tool_call: 模型返回的工具调用对象
+    :param agent: auto_p_agent对象, 字典格式
+    :return: 工具的schema
+    """
+
+    # 检查是否开启工具搜索
+    if not os.getenv('ENABLE_TOOL_SEARCH', 'false') == 'true':
+        return await build_tool_result("用户未开启工具搜索模式,请先让用户开启工具搜索模式", tool_call)
+
+    # 参数
+    tool_args = json.loads(tool_call.function.arguments)
+    tool_description = tool_args.get('tool_description', None)
+
+    if not tool_description:
+        result = f'参数tool_description不能为空,tool_description={tool_description}'
+        return await build_tool_result(result, tool_call)
+
+    if not agent.tool_searcher:
+        logger.exception(f'tool_searcher未初始化,无法进行工具搜索')
+        return await build_tool_result(f'tool_searcher未初始化,无法进行工具搜索,请尝试别的方式或请求用户操作',
+                                       tool_call)
+    # 小于等于3个匹配到的工具对象
+    tools = await agent.tool_searcher.search(
+        query=tool_description,
+        k=os.getenv('TOOL_SEARCH_K', 3)
+    )
+    logger.info(f'搜索到如下工具: {[t.name for t in tools]}')
+    tool_json_schema: list[dict] = [convert_tool(tool) for tool in tools]
+    if not tool_json_schema:
+        return await build_tool_result(f'未搜索到任何工具,请检查工具描述是否正确,tool_description={tool_description}',
+                                       tool_call)
+    return await build_tool_result(tool_json_schema, tool_call)
+
+
+# 方法,方法名,描述
+special_methods = {
+    "get_tool_schema": do_get_tool_schema,
+    "wait_for_user_input": do_wait_for_user_input,
+    "tool_search": do_tool_search,
+}
 
 if __name__ == "__main__":
     asyncio.run(remove_urls_from_snapshot_file("../../auto_p_clients/take_snapshot.json"))

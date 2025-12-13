@@ -1,6 +1,7 @@
 import json
 import os
 from contextlib import AsyncExitStack
+from typing import Callable
 
 from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
@@ -69,12 +70,13 @@ class AutoProcessAgent:
         self.servers_McpService[mcp_service.name] = mcp_service
 
     async def init_tool_searcher(self):
-        # 构建工具搜索
+        """构建工具搜索器"""
         if not self.tool_searcher and os.getenv("ENABLE_TOOL_SEARCH", "false") == "true":
             logger.info(f'开始构建工具搜索器...')
             # 构建工具搜索器
             all_tools: list[Tool] = []
             for service_name, session in self.servers.items():
+                # auto_p-tools 属于官方工具,不需要添加
                 if 'auto_p-tools' == service_name:
                     continue
                 response = await session.list_tools()
@@ -201,38 +203,12 @@ class AutoProcessAgent:
         server_name = self.tools.get(tool_name, '')
         server: ClientSession = self.servers.get(server_name, None)
         if not server:
-            return CallToolResult(
-                content=[],
-                structuredContent={
-                    "result": f'未找到{tool_name}工具',
-                }
-            )
+            return await auto_p_tools.build_tool_result(f'未找到{tool_name}工具对应的MCP服务', tool_call)
         logger.info(f"正在执行 {server_name} 服务的 {tool_name} 工具")
-        if tool_name == 'wait_for_user_input':
-            return await auto_p_tools.do_wait_for_user_input(tool_call)
-        elif tool_name == 'get_tool_schema':
-            return await auto_p_tools.do_get_tool_schema(self, tool_call)
-        elif tool_name == 'tool_search' and os.getenv('ENABLE_TOOL_SEARCH', 'false') == 'true':
-            tool_description = tool_args.get('tool_description', None)
-            if not tool_description:
-                return CallToolResult(
-                    content=[],
-                    structuredContent={
-                        "type": "tool_search",
-                        "tool_name": tool_name,
-                        "result": '参数tool_description不能为空',
-                    }
-                )
-            # 有可能没找到
-            tool_schema = await self.tool_search(tool_description)
-            return CallToolResult(
-                content=[],
-                structuredContent={
-                    "type": "tool_search",
-                    "tool_name": tool_name,
-                    "result": tool_schema if tool_schema else f'未找到该描述对应的工具, 描述:{tool_description}'
-                }
-            )
+        special_method: Callable = auto_p_tools.special_methods.get(tool_name)
+        if special_method:
+            logger.info(f'正在执行特殊方法 {tool_name}-{special_method.__doc__} ')
+            return await special_method(self, tool_call)
         elif server_name == 'chrome-devtools':
             res = await server.call_tool(tool_name, tool_args)
             temp = res.content[0] if res.content else None
