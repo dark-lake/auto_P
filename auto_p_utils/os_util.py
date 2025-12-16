@@ -119,6 +119,47 @@ def convert_tool(tool: Tool) -> Dict[str, Any]:
     }
 
 
+def response_convert_tool(tool: Tool) -> Dict[str, Any]:
+    """
+    将 MCP 工具（Python 或 JS）转换为统一的字典格式
+    """
+    # 工具名称和描述
+    name = getattr(tool, 'name', '')
+    description = getattr(tool, 'description', '')
+
+    # 尝试获取 inputSchema，兜底空字典
+    input_schema = getattr(tool, 'inputSchema', {}) or {}
+
+    # type，默认 'object'
+    schema_type = input_schema.get('type', 'object')
+
+    # properties
+    properties = {}
+    for k, v in input_schema.get('properties', {}).items():
+        # v 可能是 None 或不完整
+        v_type = v.get('type', 'string') if isinstance(v, dict) else 'string'
+        v_desc = v.get('title', '') if isinstance(v, dict) else ''
+        properties[k] = {
+            "type": v_type,
+            "description": v_desc
+        }
+
+    # required 字段，默认空列表
+    required = input_schema.get('required', [])
+
+    # 构建最终字典
+    return {
+        "type": "function",
+        "name": name,
+        "description": description,
+        "parameters": {
+            "type": schema_type,
+            "properties": properties,
+            "required": required
+        }
+    }
+
+
 async def save_file(file_path: str, content: str) -> None:
     """
     保存文件

@@ -7,24 +7,7 @@ from auto_p_services.McpServiceManager import McpServiceManager
 from auto_p_services.mcp_services_config import mcp_service_manager
 from auto_p_utils.logger_util import logger
 
-load_dotenv()  # load environment variables from .env
-
-
-# 暂时不用
-# async def connect_by_env(client: AutoProcessAgent):
-#     """
-#     通过.env文件信息mcp服务链接
-#     :param client:
-#     :return:
-#     """
-#     # 读取所有变量（字典）
-#     env_dict = dotenv_values("/Users/macbook0000/PycharmProjects/auto_P/.env")
-#     print(env_dict)
-#     for key, value in env_dict.items():
-#         if key.endswith('_SERVER'):
-#             logger.info(f"开始链接服务: {key}")
-#             await client.connect_to_server(name=key, server_script_path=value)
-#             logger.info(f"成功链接到 {key} 服务!")
+load_dotenv()
 
 
 async def connect_by_config(client: AutoProcessAgent):

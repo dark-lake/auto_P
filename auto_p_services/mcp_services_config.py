@@ -1,3 +1,5 @@
+import os
+
 from dotenv import load_dotenv
 
 from auto_p_services.McpServiceManager import McpServiceManager
@@ -8,6 +10,14 @@ args 第一个必须是.py/.js文件的绝对路径, 所有参数添加到其后
 """
 mcp_service_manager = McpServiceManager(
     mcp_config={
+        # 官方服务,不要修改
+        os.getenv('OFFICIAL_SERVICE_NAMES'): {
+            "transport": "stdio",
+            "description": "官方提供工具(如工具搜索,暂停和等待)",
+            "command": "python",
+            "args": ["/Users/macbook0000/PycharmProjects/auto_P/auto_p_services/auto_p_server.py"],
+        },
+        # 三方服务
         "chrome-devtools": {
             "transport": "stdio",
             "command": "node",
@@ -24,11 +34,5 @@ mcp_service_manager = McpServiceManager(
         #     "command": "python",
         #     "args": ["/Users/macbook0000/PycharmProjects/auto_P/auto_p_services/browser_p_server.py"],
         # },
-        "auto_p-tools": {
-            "transport": "stdio",
-            "description": "官方提供工具(如工具搜索,暂停和等待)",
-            "command": "python",
-            "args": ["/Users/macbook0000/PycharmProjects/auto_P/auto_p_services/auto_p_server.py"],
-        },
     }
 )
