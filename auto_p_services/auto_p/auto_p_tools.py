@@ -92,7 +92,7 @@ async def lightweight_ally(ally_text: str) -> str:
         asyncio.create_task(save_file(file_in, ally_text))
         asyncio.create_task(save_file(file_out, res))
 
-        return res
+        return res, file_in, file_out
     except Exception as e:
         logger.error(f'处理ally_text时出错: {e}')
         raise

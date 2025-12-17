@@ -25,6 +25,7 @@ from auto_p_prompts.prompts import auto_p_prompts as auto_p_prompts
 from auto_p_prompts.prompts_manager import PromptsManager
 from auto_p_services.McpServiceManager import McpServiceManager
 from auto_p_services.auto_p import auto_p_tools
+from auto_p_services.auto_p.js_func import highlight_func
 from auto_p_services.mcp_services_config import mcp_service_manager
 from auto_p_utils.logger_util import logger
 from auto_p_utils.os_util import response_convert_tool
@@ -403,9 +404,27 @@ class AutoProcessAgent:
             logger.info(f'正在执行特殊方法 {tool_name}')
             return await special_method(self, tool_call)
         elif server_name == 'chrome-devtools':
+            # 页面基础搭建,主要是为了高亮显示
+            # 直接传递 highlight_func 字典而不是变量名
+            try:
+                build_highlight_env = await server.call_tool("evaluate_script", highlight_func)
+                logger.info(f'高亮环境搭建结果: {build_highlight_env}')
+            except Exception as e:
+                logger.error(f'高亮环境搭建失败: {e}')
+                # 如果高亮环境搭建失败，尝试使用备用方案
+                try:
+                    backup_highlight_func = {
+                        "function": "() => { return { ok: true, message: 'Highlight environment setup skipped' }; }"
+                    }
+                    build_highlight_env = await server.call_tool("evaluate_script", backup_highlight_func)
+                    logger.info(f'备用高亮环境搭建结果: {build_highlight_env}')
+                except Exception as backup_e:
+                    logger.error(f'备用高亮环境搭建也失败了: {backup_e}')
             # 对于参数为uid的情况页面需要高亮展示
             if tool_args.get("uid"):
-                await self._heightlight_show(tool_args.get("uid"), server)
+                next_version_uid = await self._heightlight_show(tool_args.get("uid"), server)
+                tool_args['uid'] = next_version_uid
+            # 执行工具方法
             res = await server.call_tool(tool_name, tool_args)
             temp = res.content[0] if res.content else None
             if not temp:
@@ -417,11 +436,14 @@ class AutoProcessAgent:
                 if len(resp_and_a11y_text) > 1:
                     # 对a11y文本进行移除URL
                     logger.info(f'移除URL前长度:{orig_length}')
-                    resp_and_a11y_text[1] = await auto_p_tools.lightweight_ally(resp_and_a11y_text[1])
+                    # file_in 原A11Y存储路径,file_out,去除url后的存储路径
+                    resp_and_a11y_text[1], file_in, file_out = await auto_p_tools.lightweight_ally(
+                        resp_and_a11y_text[1])
                     temp.text = '\n## Latest page snapshot\n'.join(resp_and_a11y_text)
                     curr_length = len(temp.text)
                     logger.info(
                         f'移除URL后长度:{curr_length},缩减了{str(round(((orig_length - curr_length) / orig_length) * 100, 2))}%')
+                    logger.info(f'原始A11Y文件:{file_in},去除URL后的A11Y文件:{file_out}')
                     return res
             return res
 
@@ -431,96 +453,36 @@ class AutoProcessAgent:
             return await auto_p_tools.build_tool_result(f'调用{tool_name}工具异常,请分析异常后再进行下一步: {e}',
                                                         tool_call)
 
-    async def _heightlight_show(self, uid: str, server: ClientSession):
+    async def _heightlight_show(self, uid: str, server: ClientSession) -> str:
         """
         高亮展示页面元素
         :param uid: 页面元素uid
         :return:
         """
-        js_func = """(a11yNode, duration = 3000) => {
-    const {role, name, url} = a11yNode || {};
-
-    let candidates = [];
-
-    // 1. 基于 role
-    if (role === "link") {
-        candidates = Array.from(document.querySelectorAll("a"));
-    } else if (role === "textbox") {
-        candidates = Array.from(document.querySelectorAll("input, textarea"));
-    } else {
-        candidates = Array.from(document.querySelectorAll("*"));
-    }
-
-    // 2. 过滤 accessible name（文本 / aria-label）
-    if (name) {
-        candidates = candidates.filter(el => {
-            const text = el.innerText?.trim();
-            const aria = el.getAttribute?.("aria-label");
-            return text === name || aria === name;
-        });
-    }
-
-    // 3. 过滤 url（href）
-    if (url) {
-        candidates = candidates.filter(el => el.getAttribute?.("href") === url);
-    }
-
-    const el = candidates[0];
-    if (!el) {
-        return {
-            ok: false,
-            reason: "no_matching_dom",
-            role,
-            name,
-            url
-        };
-    }
-
-    // === 高亮 overlay ===
-    const rect = el.getBoundingClientRect();
-    const overlay = document.createElement("div");
-
-    Object.assign(overlay.style, {
-        position: "fixed",
-        top: rect.top + "px",
-        left: rect.left + "px",
-        width: rect.width + "px",
-        height: rect.height + "px",
-        border: "3px solid #ff4d4f",
-        boxShadow: "0 0 12px rgba(255, 77, 79, 0.8)",
-        pointerEvents: "none",
-        zIndex: 2147483647,
-        transition: "opacity 0.3s ease"
-    });
-
-    document.body.appendChild(overlay);
-
-    setTimeout(() => {
-        overlay.style.opacity = "0";
-        setTimeout(() => overlay.remove(), 300);
-    }, duration);
-
-    return {
-        ok: true,
-        matchedCount: candidates.length,
-        role,
-        name,
-        url,
-        duration
-    };
-}
-"""
-
         # 1.获取页面A11Y
         a11y: CallToolResult = await server.call_tool('take_snapshot', {})
         # 2.构造js函数的参数
         js_func_args = {}
 
+        # 当前版本对应的uid
+        search_id = uid.split("_")[1]
         if a11y.content:
             content_text = a11y.content[0].text
+            # 当前版本号
+            current_version = ""
             for line in content_text.split('\n'):
                 logger.info(line)
-                if line.lstrip().startswith(f'uid={uid} '):
+                # 设置当前版本号
+                if not current_version and line.lstrip().startswith("uid="):
+                    parsed = AutoProcessAgent.parse_a11y_line(line)
+                    if not parsed:
+                        logger.error(f'解析A11Y行失败,获取版本号失败: {line}')
+                        break
+                    # 1_23,版本号为1
+                    current_version = parsed['uid'].split("_")[0]
+                    # search_id为 当前版本号+id
+                    search_id = current_version + "_" + search_id
+                if line.lstrip().startswith(f'uid={search_id} '):
                     logger.info(f'匹配到A11Y行: {line}')
                     parsed = AutoProcessAgent.parse_a11y_line(line)
                     logger.info(parsed)
@@ -528,20 +490,205 @@ class AutoProcessAgent:
                         logger.error(f'解析A11Y行失败: {line}')
                         break
 
-                    js_func_args["uid"] = uid,
+                    js_func_args["uid"] = search_id
                     js_func_args["role"] = parsed["role"]
                     js_func_args["name"] = parsed["name"]
-                    js_func_args["url"] = parsed["url"]
+                    # js_func_args["url"] = parsed["url"]
                     break
         # 3.执行js函数
         call_js_func_data = {
-            "function": js_func,
-            "args": [js_func_args],
+            "function": """
+                        (query) => {
+                            // 确保必要的函数存在
+                            if (typeof window.__AX_HIGHLIGHT_BY_A11Y__ !== 'function') {
+                                // 定义所有必要的函数
+                                function isVisibleRect(rect) {
+                                    return (
+                                        rect.width > 0 &&
+                                        rect.height > 0 &&
+                                        rect.bottom > 0 &&
+                                        rect.right > 0 &&
+                                        rect.top < window.innerHeight &&
+                                        rect.left < window.innerWidth
+                                    );
+                                }
+
+                                function getLabelledByText(el) {
+                                    const ids = el.getAttribute?.("aria-labelledby");
+                                    if (!ids) return [];
+                                    return ids
+                                        .split(/\\s+/)
+                                        .map(id => document.getElementById(id))
+                                        .filter(Boolean)
+                                        .map(n => n.innerText?.trim())
+                                        .filter(Boolean);
+                                }
+
+                                // 构建 AX → DOM 索引
+                                window.__AX_BUILD_INDEX__ = () => {
+                                    const index = [];
+
+                                    document.querySelectorAll("*").forEach(el => {
+                                        try {
+                                            const ax = window.getComputedAccessibleNode?.(el);
+                                            if (!ax) return;
+
+                                            const rect = el.getBoundingClientRect();
+                                            if (!isVisibleRect(rect)) return;
+
+                                            index.push({
+                                                role: ax.role || null,
+                                                name: ax.name || "",
+                                                tag: el.tagName.toLowerCase(),
+                                                rect: {
+                                                    x: rect.x,
+                                                    y: rect.y,
+                                                    w: rect.width,
+                                                    h: rect.height
+                                                },
+                                                el
+                                            });
+                                        } catch (_) {}
+                                    });
+
+                                    window.__AX_DOM_INDEX__ = index;
+
+                                    return {
+                                        ok: true,
+                                        count: index.length
+                                    };
+                                };
+
+                                // AX 查询 → 精确定位 DOM
+                                window.__AX_FIND_NODE__ = (query) => {
+                                    const { role, name } = query || {};
+                                    let candidates = window.__AX_DOM_INDEX__ || [];
+
+                                    if (!candidates.length) {
+                                        return { ok: false, reason: "index_not_built" };
+                                    }
+
+                                    if (role) {
+                                        candidates = candidates.filter(n => n.role === role);
+                                    }
+
+                                    if (name) {
+                                        candidates = candidates.filter(n => {
+                                            const texts = [];
+
+                                            // AX name（最可靠）
+                                            if (n.name) texts.push(n.name);
+
+                                            // textbox 特有补充
+                                            if (role === "textbox") {
+                                                if (n.el.placeholder) texts.push(n.el.placeholder.trim());
+                                                if (n.el.value) texts.push(n.el.value.trim());
+                                                texts.push(...getLabelledByText(n.el));
+                                            }
+
+                                            return texts.some(t => t === name);
+                                        });
+                                    }
+
+                                    if (!candidates.length) {
+                                        return { ok: false, reason: "no_match" };
+                                    }
+
+                                    /* 候选排序（非常关键） */
+                                    candidates.sort((a, b) => {
+                                        let s1 = 0, s2 = 0;
+
+                                        // 可交互优先
+                                        if (typeof a.el.click === "function") s1 += 10;
+                                        if (typeof b.el.click === "function") s2 += 10;
+
+                                        // 原生语义优先
+                                        if (a.tag === "button" || a.tag === "a") s1 += 3;
+                                        if (b.tag === "button" || b.tag === "a") s2 += 3;
+
+                                        // 视口中心优先
+                                        const cy = window.innerHeight / 2;
+                                        s1 -= Math.abs(a.rect.y - cy) / 100;
+                                        s2 -= Math.abs(b.rect.y - cy) / 100;
+
+                                        return s2 - s1;
+                                    });
+
+                                    return {
+                                        ok: true,
+                                        count: candidates.length,
+                                        node: candidates[0]
+                                    };
+                                };
+
+                                // 高亮渲染
+                                window.__AX_HIGHLIGHT__ = (node, duration = 3000) => {
+                                    const el = node?.el;
+                                    if (!el) return { ok: false };
+
+                                    const rect = el.getBoundingClientRect();
+                                    const overlay = document.createElement("div");
+
+                                    Object.assign(overlay.style, {
+                                        position: "fixed",
+                                        top: rect.top + "px",
+                                        left: rect.left + "px",
+                                        width: rect.width + "px",
+                                        height: rect.height + "px",
+                                        border: "3px solid #ff4d4f",
+                                        boxShadow: "0 0 12px rgba(255,77,79,.8)",
+                                        pointerEvents: "none",
+                                        zIndex: 2147483647,
+                                        transition: "opacity .3s ease"
+                                    });
+
+                                    document.body.appendChild(overlay);
+
+                                    setTimeout(() => {
+                                        overlay.style.opacity = "0";
+                                        setTimeout(() => overlay.remove(), 300);
+                                    }, duration);
+
+                                    return { ok: true };
+                                };
+
+                                // 一体化快捷接口
+                                window.__AX_HIGHLIGHT_BY_A11Y__ = (query, duration = 3000) => {
+                                    if (!window.__AX_DOM_INDEX__ || !window.__AX_DOM_INDEX__.length) {
+                                        window.__AX_BUILD_INDEX__();
+                                    }
+
+                                    const res = window.__AX_FIND_NODE__(query);
+                                    if (!res.ok) return res;
+
+                                    window.__AX_HIGHLIGHT__(res.node, duration);
+                                    return {
+                                        ok: true,
+                                        matchedCount: res.count,
+                                        role: query.role,
+                                        name: query.name
+                                    };
+                                };
+
+                                // 立即构建索引
+                                window.__AX_BUILD_INDEX__();
+                            }
+
+                            // 确保索引已构建
+                            if (!window.__AX_DOM_INDEX__ || !window.__AX_DOM_INDEX__.length) {
+                                window.__AX_BUILD_INDEX__();
+                            }
+
+                            return window.__AX_HIGHLIGHT_BY_A11Y__(query, 3000);
+                        }
+                    """,
+            "args": [js_func_args]
         }
         logger.info(f'高亮展示参数: {call_js_func_data}')
         resp = await server.call_tool("evaluate_script", call_js_func_data)
 
         logger.info(f'高亮展示结果: {resp}')
+        return search_id
 
     async def build_tool_search_system_prompt(self) -> str:
         """
