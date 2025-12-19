@@ -25,7 +25,6 @@ from auto_p_prompts.prompts import auto_p_prompts as auto_p_prompts
 from auto_p_prompts.prompts_manager import PromptsManager
 from auto_p_services.McpServiceManager import McpServiceManager
 from auto_p_services.auto_p import auto_p_tools
-from auto_p_services.auto_p.js_func import highlight_func
 from auto_p_services.mcp_services_config import mcp_service_manager
 from auto_p_utils.logger_util import logger
 from auto_p_utils.os_util import response_convert_tool
@@ -405,21 +404,6 @@ class AutoProcessAgent:
             return await special_method(self, tool_call)
         elif server_name == 'chrome-devtools':
             # 页面基础搭建,主要是为了高亮显示
-            # 直接传递 highlight_func 字典而不是变量名
-            try:
-                build_highlight_env = await server.call_tool("evaluate_script", highlight_func)
-                logger.info(f'高亮环境搭建结果: {build_highlight_env}')
-            except Exception as e:
-                logger.error(f'高亮环境搭建失败: {e}')
-                # 如果高亮环境搭建失败，尝试使用备用方案
-                try:
-                    backup_highlight_func = {
-                        "function": "() => { return { ok: true, message: 'Highlight environment setup skipped' }; }"
-                    }
-                    build_highlight_env = await server.call_tool("evaluate_script", backup_highlight_func)
-                    logger.info(f'备用高亮环境搭建结果: {build_highlight_env}')
-                except Exception as backup_e:
-                    logger.error(f'备用高亮环境搭建也失败了: {backup_e}')
             # 对于参数为uid的情况页面需要高亮展示
             if tool_args.get("uid"):
                 next_version_uid = await self._heightlight_show(tool_args.get("uid"), server)
