@@ -5,7 +5,7 @@ import time
 import uuid
 from collections.abc import Iterable
 from contextlib import AsyncExitStack
-from typing import List, Dict, Any, Union, Callable
+from typing import List, Dict, Any, Union, Callable, Generator, AsyncGenerator
 
 import aiofiles
 import gradio as gr
@@ -25,6 +25,7 @@ from auto_p_prompts.prompts import auto_p_prompts as auto_p_prompts
 from auto_p_prompts.prompts_manager import PromptsManager
 from auto_p_services.McpServiceManager import McpServiceManager
 from auto_p_services.auto_p import auto_p_tools
+from auto_p_services.chrome_mcp.chrome_tools import ChromeTools
 from auto_p_services.mcp_services_config import mcp_service_manager
 from auto_p_utils.logger_util import logger
 from auto_p_utils.os_util import response_convert_tool
@@ -45,6 +46,7 @@ class AutoProcessAgent:
             base_url=os.getenv("CHAT_BASE_URL"),
             timeout=120,
         )
+        self.chrome_tools: ChromeTools | None = None  # 浏览器工具
         self.chat_history: list[AutoPModel] = []  # 全局对话历史
         self.servers = {}  # 存所有 server session server_name -> server_session
         self.servers_McpService: dict[str, McpServiceManager.McpService] = {}  # mcp服务列表 server_name -> McpService
@@ -54,7 +56,10 @@ class AutoProcessAgent:
         self.prompts_manager = PromptsManager()  # 提示词管理器,负责提示词的构建
         self.tool_searcher: ToolSearcher | None = None
 
-    async def _connect_to_server(self, mcp_service: 'McpServiceManager.McpService'):
+    async def _connect_to_server(
+            self,
+            mcp_service: 'McpServiceManager.McpService'
+    ) -> None:
         """
         链接到具体的mcp server
         :param mcp_service: mcp_service 配置对象,需要具体connect才能使用
@@ -92,7 +97,9 @@ class AutoProcessAgent:
         # 初始化工具搜索器
         await self.init_tool_searcher()
 
-    async def init_tool_searcher(self):
+    async def init_tool_searcher(
+            self
+    ) -> None:
         """构建工具搜索器"""
         if not self.tool_searcher and os.getenv("ENABLE_TOOL_SEARCH", "false") == "true":
             logger.info(f'开始构建工具搜索器...')
@@ -109,7 +116,9 @@ class AutoProcessAgent:
             # 增量更新:检测工具的新增、修改、删除
             await self.tool_searcher.sync_tools()
 
-    def connect_by_config(self):
+    def connect_by_config(
+            self
+    ) -> str:
         """
         通过mcp_service_config.py中配置的mcp服务进行链接
         :return:
@@ -121,7 +130,11 @@ class AutoProcessAgent:
             logger.info(f"成功链接到 {service.name} 服务!")
         return f'MCP 服务连接成功, {', '.join(service.name for service in mcp_service_list)}, 共{len(mcp_service_list)}个服务.'
 
-    def process_message(self, message: str, history: List[Union[Dict[str, Any], ChatMessage]]):
+    def process_message(
+            self,
+            message: str,
+            history: List[Union[Dict[str, Any], ChatMessage]]
+    ) -> Generator[tuple[list[dict[str, Any] | ChatMessage], str], Any, None]:
         # 添加用户输入
         async_gen = self._process_query(message, history)
         while True:
@@ -131,7 +144,11 @@ class AutoProcessAgent:
             except StopAsyncIteration:
                 break
 
-    async def _process_query(self, message: str, history: List[Union[Dict[str, Any], ChatMessage]]):
+    async def _process_query(
+            self,
+            message: str,
+            history: List[Union[Dict[str, Any], ChatMessage]]
+    ) -> AsyncGenerator[list[Any], Any]:
 
         # 返回的消息数组, 第一个chat message是用于content输出,后面的内容都是用来tool输出
         response = []
@@ -298,14 +315,16 @@ class AutoProcessAgent:
                         result = await self.execute_tool(tool_call)
                         if result.content:
                             output = result.content[0]
-                            if hasattr(output, 'model_dump'):
-                                output = output.model_dump()
+                            if output.type == 'text':
+                                output = output.text
+                            elif hasattr(output, 'model_dump'):
+                                output = output.model_dump_json()
                         else:
-                            output = result.structuredContent
+                            output = json.dumps(result.structuredContent, ensure_ascii=False)
                         auto_p_tool_call_result = AutoPToolCallResult(
                             type="function_call_output",
                             name=tool_name,
-                            output=json.dumps(output, ensure_ascii=False),
+                            output=output,
                             call_id=call_id
                         )
                         await self._process_event(auto_p_tool_call_result, event, chat_history, chat_messages_container,
@@ -322,8 +341,13 @@ class AutoProcessAgent:
                         chat_stop = True
         self.chat_history.extend(chat_history.values())
 
-    async def _process_event(self, item: AutoPModel, event: ResponseStreamEvent | None, chat_history: dict,
-                             chat_messages_container: dict, response: list):
+    async def _process_event(
+            self,
+            item: AutoPModel,
+            event: ResponseStreamEvent | None,
+            chat_history: dict,
+            chat_messages_container: dict, response: list
+    ) -> None:
         """负责消息的处理"""
         if isinstance(item, AutoPMessage):
             if item.role == "assistant":
@@ -371,7 +395,11 @@ class AutoProcessAgent:
             else:
                 logger.error(f"未找到对应的工具调用结果: {event.item_id}")
 
-    async def get_tool_from_session(self, tool_names: set[str], session: ClientSession = None) -> list[Tool]:
+    async def get_tool_from_session(
+            self,
+            tool_names: set[str],
+            session: ClientSession = None
+    ) -> list[Tool]:
         """获取指定session中的指定Tool"""
         need_tools = []
         if session:
@@ -386,7 +414,10 @@ class AutoProcessAgent:
                     tool_names -= {tool.name}
         return need_tools
 
-    async def execute_tool(self, tool_call: ToolCall) -> CallToolResult:
+    async def execute_tool(
+            self,
+            tool_call: ToolCall
+    ) -> CallToolResult:
         """
         实际执行tool的方法
         :return: 方法执行的结果
@@ -403,147 +434,18 @@ class AutoProcessAgent:
             logger.info(f'正在执行特殊方法 {tool_name}')
             return await special_method(self, tool_call)
         elif server_name == 'chrome-devtools':
-            # 对于参数为uid的情况页面需要高亮展示
-            if tool_args.get("uid"):
-                await self._heightlight_show(tool_args.get("uid"), server)
-            res = await server.call_tool(tool_name, tool_args)
-            temp = res.content[0] if res.content else None
-            if not temp:
-                return res
-            # 对工具返回结果中涉及A11Y结构的部分进行移除URL
-            if temp.type == 'text':
-                orig_length = len(temp.text)
-                resp_and_a11y_text = temp.text.split("\n## Latest page snapshot\n")
-                if len(resp_and_a11y_text) > 1:
-                    # 对a11y文本进行移除URL
-                    logger.info(f'移除URL前长度:{orig_length}')
-                    resp_and_a11y_text[1] = await auto_p_tools.lightweight_ally(resp_and_a11y_text[1])
-                    temp.text = '\n## Latest page snapshot\n'.join(resp_and_a11y_text)
-                    curr_length = len(temp.text)
-                    logger.info(
-                        f'移除URL后长度:{curr_length},缩减了{str(round(((orig_length - curr_length) / orig_length) * 100, 2))}%')
-                    return res
-            return res
-
+            if not self.chrome_tools:
+                self.chrome_tools = ChromeTools(server)
+            return await self.chrome_tools.invoke_tool(tool_call)
         try:
             return await server.call_tool(tool_name, tool_args)
         except Exception as e:
             return await auto_p_tools.build_tool_result(f'调用{tool_name}工具异常,请分析异常后再进行下一步: {e}',
                                                         tool_call)
 
-    async def _heightlight_show(self, uid: str, server: ClientSession):
-        """
-        高亮展示页面元素
-        :param uid: 页面元素uid
-        :return:
-        """
-        js_func = """(a11yNode, duration = 3000) => {
-    const {role, name, url} = a11yNode || {};
-
-    let candidates = [];
-
-    // 1. 基于 role
-    if (role === "link") {
-        candidates = Array.from(document.querySelectorAll("a"));
-    } else if (role === "textbox") {
-        candidates = Array.from(document.querySelectorAll("input, textarea"));
-    } else {
-        candidates = Array.from(document.querySelectorAll("*"));
-    }
-
-    // 2. 过滤 accessible name（文本 / aria-label）
-    if (name) {
-        candidates = candidates.filter(el => {
-            const text = el.innerText?.trim();
-            const aria = el.getAttribute?.("aria-label");
-            return text === name || aria === name;
-        });
-    }
-
-    // 3. 过滤 url（href）
-    if (url) {
-        candidates = candidates.filter(el => el.getAttribute?.("href") === url);
-    }
-
-    const el = candidates[0];
-    if (!el) {
-        return {
-            ok: false,
-            reason: "no_matching_dom",
-            role,
-            name,
-            url
-        };
-    }
-
-    // === 高亮 overlay ===
-    const rect = el.getBoundingClientRect();
-    const overlay = document.createElement("div");
-
-    Object.assign(overlay.style, {
-        position: "fixed",
-        top: rect.top + "px",
-        left: rect.left + "px",
-        width: rect.width + "px",
-        height: rect.height + "px",
-        border: "3px solid #ff4d4f",
-        boxShadow: "0 0 12px rgba(255, 77, 79, 0.8)",
-        pointerEvents: "none",
-        zIndex: 2147483647,
-        transition: "opacity 0.3s ease"
-    });
-
-    document.body.appendChild(overlay);
-
-    setTimeout(() => {
-        overlay.style.opacity = "0";
-        setTimeout(() => overlay.remove(), 300);
-    }, duration);
-
-    return {
-        ok: true,
-        matchedCount: candidates.length,
-        role,
-        name,
-        url,
-        duration
-    };
-}
-"""
-
-        # 1.获取页面A11Y
-        a11y: CallToolResult = await server.call_tool('take_snapshot', {})
-        # 2.构造js函数的参数
-        js_func_args = {}
-
-        if a11y.content:
-            content_text = a11y.content[0].text
-            for line in content_text.split('\n'):
-                logger.info(line)
-                if line.lstrip().startswith(f'uid={uid} '):
-                    logger.info(f'匹配到A11Y行: {line}')
-                    parsed = AutoProcessAgent.parse_a11y_line(line)
-                    logger.info(parsed)
-                    if not parsed:
-                        logger.error(f'解析A11Y行失败: {line}')
-                        break
-
-                    js_func_args["uid"] = uid,
-                    js_func_args["role"] = parsed["role"]
-                    js_func_args["name"] = parsed["name"]
-                    js_func_args["url"] = parsed["url"]
-                    break
-        # 3.执行js函数
-        call_js_func_data = {
-            "function": js_func,
-            "args": [js_func_args],
-        }
-        logger.info(f'高亮展示参数: {call_js_func_data}')
-        resp = await server.call_tool("evaluate_script", call_js_func_data)
-
-        logger.info(f'高亮展示结果: {resp}')
-
-    async def build_tool_search_system_prompt(self) -> str:
+    async def build_tool_search_system_prompt(
+            self
+    ) -> str:
         """
         构建开启工具搜索后的系统提示词
         :return: 工具
@@ -570,7 +472,10 @@ class AutoProcessAgent:
         )
         return res
 
-    async def build_tools_schema(self, tool_name: str = None) -> Iterable:
+    async def build_tools_schema(
+            self,
+            tool_name: str = None
+    ) -> Iterable:
         # 当指定要调用的工具时,只返回该工具的schema
         if tool_name:
             server = self.servers.get(tool_name, None)
@@ -590,14 +495,19 @@ class AutoProcessAgent:
             logger.info(f"可用工具(未启用工具搜索模式): {len(self.tools)}")
             return [response_convert_tool(tool) for tool in self.tools]
 
-    def clear_chat_history(self, history: List[Union[Dict[str, Any], ChatMessage]]) -> List[
-        Union[Dict[str, Any], ChatMessage]]:
+    def clear_chat_history(
+            self,
+            history: List[Union[Dict[str, Any], ChatMessage]]
+    ) -> List[Union[Dict[str, Any], ChatMessage]]:
         """清空历史记录"""
         self.chat_history = []
         logger.info(f'已清空历史记录:{len(history)}')
         return []
 
-    async def _process_chat_history(self, history: List[Union[Dict[str, Any], ChatMessage]]):
+    async def _process_chat_history(
+            self,
+            history: List[Union[Dict[str, Any], ChatMessage]]
+    ) -> None:
         """
         处理历史记录
         1.将其中的tool_call_result中超长的文本进行缩减
@@ -608,23 +518,6 @@ class AutoProcessAgent:
             if isinstance(item, AutoPToolCallResult) and item.name == 'take_snapshot':
                 # 如果是take_snapshot那就缩减一下超长文本
                 item.output = item.output[:512] + "..."
-
-    @staticmethod
-    def parse_a11y_line(line: str) -> dict:
-        import re
-        m = re.search(
-            r'uid=(\S+)\s+(\w+)\s+"([^"]+)"(?:\s+url="([^"]+)")?',
-            line
-        )
-        if not m:
-            return {}
-
-        return {
-            "uid": m.group(1),
-            "role": m.group(2),
-            "name": m.group(3),
-            "url": m.group(4) or ""
-        }
 
 
 client = AutoProcessAgent()
@@ -674,13 +567,3 @@ def gradio_interface():
 if __name__ == "__main__":
     interface = gradio_interface()
     interface.launch(debug=True, theme=gr.themes.Soft())
-    #
-    # with open("/Users/macbook0000/PycharmProjects/auto_P/a11y_txt/1765881869_in.json", 'r', encoding="utf-8") as f:
-    #     data = f.read()
-    # with open("/Users/macbook0000/PycharmProjects/auto_P/temp1.json", 'w', encoding="utf-8") as j:
-    #     for line in data.split("\n"):
-    #         res = parse_a11y_line(line)
-    #         print(line+"\n")
-    #         print(res)
-    #         j.write(line+"\n")
-    #         j.write(json.dumps(res, ensure_ascii=False))
