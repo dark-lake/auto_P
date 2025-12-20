@@ -67,7 +67,6 @@ class ChromeTools:
             # 直接构建JSON数组而不是使用model_dump_json后再json.dumps
             page_list = [page.model_dump_json() for page in self.page_tools.pages]
             text_content += f'\n## 当前已打开的页面列表\n{','.join(page_list)}'
-            print(text_content)
         return text_content
 
 
