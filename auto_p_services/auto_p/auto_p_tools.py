@@ -159,7 +159,7 @@ async def do_tool_search(agent: 'AutoProcessAgent', tool_call: ToolCall) -> Call
     # 小于等于3个匹配到的工具对象
     tools = await agent.tool_searcher.search(
         query=tool_description,
-        k=os.getenv('TOOL_SEARCH_K', 3)
+        k=int(os.getenv('TOOL_SEARCH_K', 3))
     )
     logger.info(f'搜索到如下工具: {[t.name for t in tools]}')
     tool_json_schema: list[dict] = [convert_tool(tool) for tool in tools]
@@ -177,4 +177,4 @@ special_methods = {
 }
 
 if __name__ == "__main__":
-    asyncio.run(remove_urls_from_snapshot_file("../../auto_p_clients/take_snapshot.json"))
+    pass

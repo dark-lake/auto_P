@@ -1,0 +1,6 @@
+新增功能	feat（分支：feature/...）
+修复 bug	fix
+代码优化、不改功能	refactor
+性能优化	perf
+文档修改	docs
+配置/构建修改	chore

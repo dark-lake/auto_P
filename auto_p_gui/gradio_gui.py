@@ -544,8 +544,8 @@ def gradio_interface():
             height=500,
             # show_copy_button=True,
             avatar_images=(
-                os.getenv("USER_AVATAR_PATH"),
-                os.getenv("AUTO_P_AVATAR_PATH"),
+                os.path.join(os.getenv("AVATAR_PATH"), "user.png"),
+                os.path.join(os.getenv("AVATAR_PATH"), "robot.png"),
             )
         )
 
