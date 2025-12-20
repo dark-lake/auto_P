@@ -20,7 +20,7 @@ logger.add(
     rotation="00:00",
     retention="7 days",
     enqueue=True,
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | {message}",
     mode='a',
     encoding='utf-8'
 )
@@ -32,7 +32,7 @@ if not os.getenv('MCP_SERVER_MODE'):
     logger.add(
         sys.stderr,  # 使用 stderr 而不是 stdout，避免干扰 stdio 通信
         enqueue=True,
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | {message}"
     )
 
 __all__ = ["logger"]
