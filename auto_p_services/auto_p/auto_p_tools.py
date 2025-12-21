@@ -12,7 +12,10 @@ from auto_p_utils.logger_util import logger
 from auto_p_utils.os_util import convert_tool
 
 
-async def build_tool_result(result: str | list, tool_call: ToolCall) -> CallToolResult:
+async def build_tool_result(
+        result: str | list,
+        tool_call: ToolCall
+) -> CallToolResult:
     # 工具名称
     return CallToolResult(
         content=[],
@@ -24,7 +27,10 @@ async def build_tool_result(result: str | list, tool_call: ToolCall) -> CallTool
     )
 
 
-async def do_get_tool_schema(agent: 'AutoProcessAgent', tool_call: ToolCall) -> CallToolResult:
+async def do_get_tool_schema(
+        agent: 'AutoProcessAgent',
+        tool_call: ToolCall
+) -> CallToolResult:
     """
     获取tool_names各工具的json schema
     :param tool_call: 模型返回的工具调用对象
@@ -46,7 +52,10 @@ async def do_get_tool_schema(agent: 'AutoProcessAgent', tool_call: ToolCall) -> 
     return await build_tool_result(result, tool_call)
 
 
-async def do_wait_for_user_input(agent: 'AutoProcessAgent', tool_call: ToolCall) -> CallToolResult:
+async def do_wait_for_user_input(
+        agent: 'AutoProcessAgent',
+        tool_call: ToolCall
+) -> CallToolResult:
     """
     等待用户输入
     :param tool_call: 模型返回的工具调用对象
@@ -57,8 +66,6 @@ async def do_wait_for_user_input(agent: 'AutoProcessAgent', tool_call: ToolCall)
     tool_args = json.loads(tool_call.function.arguments)
     # 暂停原因
     pause_reason = tool_args.get('pause_reason', None)
-    print("模型要求暂停 → 等待你的操作")
-    print(f"暂停原因:{pause_reason}")
 
     # 根据操作系统类型选择合适的GUI方法
     def get_input_with_gui() -> str:
@@ -83,11 +90,11 @@ async def do_wait_for_user_input(agent: 'AutoProcessAgent', tool_call: ToolCall)
                 return ""
             except subprocess.CalledProcessError as e:
                 # AppleScript执行失败，回退到控制台输入
-                print(f"AppleScript对话框失败 ({str(e)})，回退到控制台输入")
+                logger.info(f"AppleScript对话框失败 ({str(e)})，回退到控制台输入")
                 return input(f"暂停原因: {pause_reason}\n请输入你的操作指令:")
             except Exception as e:
                 # 其他异常，也回退到控制台输入
-                print(f"GUI输入失败 ({str(e)})，回退到控制台输入")
+                logger.info(f"GUI输入失败 ({str(e)})，回退到控制台输入")
                 return input(f"暂停原因: {pause_reason}\n请输入你的操作指令:")
 
         # Windows系统使用PowerShell
@@ -111,11 +118,11 @@ async def do_wait_for_user_input(agent: 'AutoProcessAgent', tool_call: ToolCall)
                 return user_input
             except subprocess.CalledProcessError as e:
                 # PowerShell执行失败，回退到控制台输入
-                print(f"PowerShell对话框失败 ({str(e)})，回退到控制台输入")
+                logger.info(f"PowerShell对话框失败 ({str(e)})，回退到控制台输入")
                 return input(f"暂停原因: {pause_reason}\n请输入你的操作指令:")
             except Exception as e:
                 # 其他异常，也回退到控制台输入
-                print(f"GUI输入失败 ({str(e)})，回退到控制台输入")
+                logger.info(f"GUI输入失败 ({str(e)})，回退到控制台输入")
                 return input(f"暂停原因: {pause_reason}\n请输入你的操作指令:")
 
         # 其他系统或未识别系统，直接使用控制台输入
@@ -132,7 +139,10 @@ async def do_wait_for_user_input(agent: 'AutoProcessAgent', tool_call: ToolCall)
     return await build_tool_result(user_input, tool_call)
 
 
-async def do_tool_search(agent: 'AutoProcessAgent', tool_call: ToolCall) -> CallToolResult:
+async def do_tool_search(
+        agent: 'AutoProcessAgent',
+        tool_call: ToolCall
+) -> CallToolResult:
     """
     实际的搜索工具方法, 通过向量匹配的方式
     :param tool_call: 模型返回的工具调用对象

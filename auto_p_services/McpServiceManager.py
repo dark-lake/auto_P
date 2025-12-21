@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Literal, Optional, Dict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from auto_p_utils.logger_util import logger
 
@@ -16,8 +16,20 @@ class McpServiceManager:
         name: str = Field(..., min_length=1)
         description: str = Field(..., min_length=1)
         transport: Literal["stdio", "sse", "streamable-http"] = Field(...)
-        command: Literal["python", "node"] = Field(...)
+        command: str = Field(...)
         args: list[str] = Field(..., min_items=1)
+        env: Optional[Dict[str, str]] = Field(default=None)
+
+        @field_validator('command')
+        def validate_command(cls, v):
+            """验证command，支持node或者以'python'结尾的python命令"""
+            # 支持node命令
+            if v == "node":
+                return v
+            # 验证python命令以'python'结尾
+            if not v.endswith('python'):
+                raise ValueError('command必须是"node"或者以"python"结尾的python路径')
+            return v
 
         model_config = {
             'validate_assignment': True
@@ -34,7 +46,8 @@ class McpServiceManager:
                 description=service_config["description"],
                 transport=service_config["transport"],
                 command=service_config["command"],
-                args=service_config["args"]
+                args=service_config["args"],
+                env=service_config.get("env")
             )
             self.mcp_services_list.append(service)
             logger.info(f"成功解析服务: {service_name}")

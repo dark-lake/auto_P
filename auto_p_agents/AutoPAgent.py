@@ -69,10 +69,15 @@ class AutoProcessAgent:
         if not (is_python or is_js):
             raise ValueError("服务脚本必须是python或js文件")
 
+        # 准备环境变量
+        env_vars = {"PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+        if mcp_service.env:
+            env_vars.update(mcp_service.env)
+
         server_params = StdioServerParameters(
             command=mcp_service.command,
             args=(mcp_service.args or []),
-            env={"PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+            env=env_vars
         )
         if mcp_service.transport == 'stdio':
             stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
@@ -319,6 +324,9 @@ class AutoProcessAgent:
                                 output = output.model_dump_json()
                         else:
                             output = json.dumps(result.structuredContent, ensure_ascii=False)
+
+                        logger.info(f'工具{tool_name}执行结果: {output}')
+
                         auto_p_tool_call_result = AutoPToolCallResult(
                             type="function_call_output",
                             name=tool_name,
@@ -339,8 +347,8 @@ class AutoProcessAgent:
                         chat_stop = True
         self.chat_history.extend(chat_history.values())
 
+    @staticmethod
     async def _process_event(
-            self,
             item: AutoPModel,
             event: ResponseStreamEvent | None,
             chat_history: dict,
