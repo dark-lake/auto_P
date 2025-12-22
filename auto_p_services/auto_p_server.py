@@ -54,6 +54,20 @@ async def get_tool_schema(tool_names: list[str]) -> str:
     pass
 
 
+@mcp.tool(
+    name="save_to_file",
+    description="像内容保存到文件中"
+)
+async def save_to_file(file_path: str, content: str) -> str:
+    """
+    保存内容到文件中
+    :param file_path: 文件路径
+    :param content: 文件内容
+    :return: 保存成功
+    """
+    pass
+
+
 async def unified_output_func(tool_name: str, args: list[Any], output: CallToolResult) -> dict:
     """
     统一处理工具返回格式

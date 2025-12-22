@@ -179,11 +179,48 @@ async def do_tool_search(
     return await build_tool_result(tool_json_schema, tool_call)
 
 
+async def do_save_to_file(
+        agent: 'AutoProcessAgent',
+        tool_call: ToolCall
+) -> CallToolResult:
+    """
+    保存内容到文件中
+    :param tool_call: 模型返回的工具调用对象
+    :param agent: auto_p_agent对象, 字典格式
+    :return:
+    """
+    # 参数
+    tool_args = json.loads(tool_call.function.arguments)
+    file_path = tool_args.get('file_path', None)
+    content = tool_args.get('content', None)
+
+    # 参数校验
+    if not file_path:
+        result = "文件路径不能为空"
+        return await build_tool_result(result, tool_call)
+
+    if content is None:
+        result = "文件内容不能为空"
+        return await build_tool_result(result, tool_call)
+
+    try:
+        # 使用工具函数保存文件
+        from auto_p_utils.os_util import save_file
+        await save_file(file_path, content)
+        result = f"文件已成功保存到: {file_path}"
+    except Exception as e:
+        logger.exception(f"保存{file_path}文件时发生错误: {str(e)}")
+        result = f"保存{file_path}文件时发生错误: {str(e)}"
+
+    return await build_tool_result(result, tool_call)
+
+
 # 方法,方法名,描述
 special_methods = {
     "get_tool_schema": do_get_tool_schema,
     "wait_for_user_input": do_wait_for_user_input,
     "tool_search": do_tool_search,
+    "save_to_file": do_save_to_file,
 }
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from datetime import datetime
 
 import aiofiles
 from mcp import ClientSession
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, TextContent, ContentBlock
 from openai.types.beta.threads.runs import ToolCall
 
 from auto_p_services.chrome_mcp.page_tools import PageTools
@@ -33,9 +33,16 @@ class ChromeTools:
         if not self.page_tools:
             self.page_tools = PageTools(self.server)
 
+        # 执行前置调用, 用来修改tool_call中的参数
+        await self._per_call(tool_call)
+
         # 获取工具调用数据
         tool_name = tool_call.function.name
         tool_args = json.loads(tool_call.function.arguments)
+
+        logger.info(f'开始执行工具调用:{tool_args}')
+
+        # 执行工具调用
         tool_call_result = await self.server.call_tool(tool_name, tool_args)
 
         tool_call_result_content = tool_call_result.content[0] if tool_call_result.content else None
@@ -43,15 +50,45 @@ class ChromeTools:
         if not tool_call_result_content:
             return tool_call_result
 
+        # 执行后置调用, 用来修改工具调用结果
+        await self._post_call(tool_call, tool_call_result_content)
+
+        return tool_call_result
+
+    async def _per_call(
+            self,
+            tool_call: ToolCall
+    ) -> None:
+        """ 工具调用的前置调用"""
+
+        tool_name = tool_call.function.name
+        tool_args = json.loads(tool_call.function.arguments)
+
+        # 如果调用的是take_screenshot,那就要限制不能全部截屏
+        if tool_name == 'take_screenshot':
+            tool_args['filePath'] = os.path.join(os.getenv("IMG_PATH"), 'take_screenshot.png')
+            tool_args['format'] = tool_args.get('format', 'png')
+            tool_args['fullPage'] = False  # 默认非全屏截屏
+            # uid = tool_args.get('uid', None)
+            # quality = tool_args.get('quality', None)
+            tool_call.function.arguments = json.dumps(tool_args)
+
+    async def _post_call(
+            self,
+            tool_call: ToolCall,
+            tool_call_result_content: ContentBlock
+    ):
+        """后置调用,负责处理工具调用结果"""
+
+        tool_name = tool_call.function.name
+
         # 移除A11Y中的所有URL
-        if tool_call_result_content.type == 'text':
+        if isinstance(tool_call_result_content, TextContent) and tool_call_result_content.type == 'text':
             tool_call_result_content.text = await remove_urls(tool_call_result_content.text)
 
         # 添加当前页面列表
         if tool_name not in ['list_pages', 'new_page', 'navigate_page', 'select_page', 'close_page']:
             tool_call_result_content.text = await self.append_page_list(tool_call_result_content.text)
-
-        return tool_call_result
 
     async def append_page_list(
             self,

@@ -174,8 +174,10 @@ class AutoProcessAgent:
         )
         # 展示到页面上
         id = str(uuid.uuid4())
-        chat_messages_container['user_' + id] = ChatMessage(role=user_message.role,
-                                                            content=user_message.content[0].text)
+        chat_messages_container['user_' + id] = ChatMessage(
+            role=user_message.role,
+            content=user_message.content[0].text
+        )
         response.append(chat_messages_container['user_' + id])
         yield response
         # 添加一个assistant的页面展示
@@ -240,7 +242,7 @@ class AutoProcessAgent:
                         final_text += event.delta
                         yield response
 
-                        # ---- 工具调用开始（示例）----
+                    # ---- 工具调用开始（示例）----
                     elif event.type == "response.output_item.added":
                         if event.item.type == "message":
                             # 记录assistant content
