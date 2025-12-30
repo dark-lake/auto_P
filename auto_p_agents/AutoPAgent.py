@@ -209,16 +209,21 @@ class AutoProcessAgent:
             final_text = ""
             call_id = ""
             tool_name = ""
+            process_status = "in_progress"
 
             stream = await self.openai.responses.create(
                 model=os.getenv("CHAT_OPEN_MODEL"),
-                input=self.chat_history + list(chat_history.values()),
+                input={
+                    "status": process_status,
+                    "messages": self.chat_history + list(chat_history.values())
+                },
                 temperature=0.95,
                 stream=True,
-                stream_options={
-                    "include_usage": True,
-                    "chunk_include_usage": True,
-                },
+                # stream_options={
+                #     "include_usage": True,
+                #     "chunk_include_usage": True,
+                # },
+                store=False,
                 extra_body={
                     "thinking": {
                         "type": "disabled"  # 不使用深度思考能力
@@ -328,13 +333,20 @@ class AutoProcessAgent:
                             output = json.dumps(result.structuredContent, ensure_ascii=False)
 
                         logger.info(f'工具{tool_name}执行结果: {output}')
-
-                        auto_p_tool_call_result = AutoPToolCallResult(
-                            type="function_call_output",
-                            name=tool_name,
-                            output=output,
-                            call_id=call_id
-                        )
+                        if output.startswith("data:image/png;base64"):
+                            auto_p_tool_call_result = AutoPToolCallResult(
+                                type="function_call_output",
+                                name=tool_name,
+                                output=output,
+                                call_id=call_id
+                            )
+                        else:
+                            auto_p_tool_call_result = AutoPToolCallResult(
+                                type="function_call_output",
+                                name=tool_name,
+                                output=output,
+                                call_id=call_id
+                            )
                         await self._process_event(auto_p_tool_call_result, event, chat_history, chat_messages_container,
                                                   response)
                         yield response
@@ -342,11 +354,12 @@ class AutoProcessAgent:
 
                     # ---- 最终文本 ----
                     elif event.type == "response.output_item.done":
-                        pass
+                        process_status = "completed"
 
                     # ---- 整个 response 完成 ----
                     elif event.type == "response.completed":
                         chat_stop = True
+
         self.chat_history.extend(chat_history.values())
 
     @staticmethod

@@ -40,7 +40,7 @@ class AutoPToolCallResult(BaseModel):
     """工具调用结果模型"""
     type: str = Field(default="function_call_output", description="结果类型")
     name: str = Field(default="", description="工具名称")
-    output: str = Field(default="", description="工具输出")
+    output: str | dict = Field(default="", description="工具输出")
     call_id: str = Field(default="", description="调用ID")
 
 

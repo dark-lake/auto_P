@@ -173,6 +173,30 @@ async def save_file(file_path: str, content: str) -> None:
     directory = os.path.dirname(file_path)
     if directory and not os.path.exists(directory):
         os.makedirs(directory, exist_ok=True)
-    
-    async with aiofiles.open(file_path, "w", encoding='utf-8') as f_in:
-        await f_in.write(content)
+    try:
+        async with aiofiles.open(file_path, "w", encoding='utf-8') as f_in:
+            await f_in.write(content)
+    except Exception as e:
+        logger.error(f'保存文件失败: {e}')
+        raise MyBaseException(MyBaseExceptionCode.FILE_WRITE_FAILED, f'保存文件{file_path}失败')
+
+
+async def read_png(file_path: str) -> str:
+    """
+    读取png,返回base64
+    :param file_path: 图片路径
+    :return: base64
+    """
+    import aiofiles
+    import base64
+
+    if not os.path.exists(file_path):
+        logger.info(f'图片不存在: {file_path}')
+        raise MyBaseException(MyBaseExceptionCode.FILE_NOT_EXIST, f'图片{file_path}不存在')
+    try:
+        async with aiofiles.open(file_path, "rb") as f:
+            png_data = await f.read()
+            return base64.b64encode(png_data).decode('utf-8')
+    except Exception as e:
+        logger.error(f'读取图片失败: {e}')
+        raise MyBaseException(MyBaseExceptionCode.FILE_READ_FAILED, f'读取图片{file_path}失败')

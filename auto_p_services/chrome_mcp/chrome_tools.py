@@ -11,7 +11,7 @@ from openai.types.beta.threads.runs import ToolCall
 
 from auto_p_services.chrome_mcp.page_tools import PageTools
 from auto_p_utils.logger_util import logger
-from auto_p_utils.os_util import save_file
+from auto_p_utils.os_util import save_file, read_png
 
 
 class ChromeTools:
@@ -39,8 +39,6 @@ class ChromeTools:
         # 获取工具调用数据
         tool_name = tool_call.function.name
         tool_args = json.loads(tool_call.function.arguments)
-
-        logger.info(f'开始执行工具调用:{tool_args}')
 
         # 执行工具调用
         tool_call_result = await self.server.call_tool(tool_name, tool_args)
@@ -81,6 +79,7 @@ class ChromeTools:
         """后置调用,负责处理工具调用结果"""
 
         tool_name = tool_call.function.name
+        # tool_args = json.loads(tool_call.function.arguments)
 
         # 移除A11Y中的所有URL
         if isinstance(tool_call_result_content, TextContent) and tool_call_result_content.type == 'text':
@@ -89,6 +88,18 @@ class ChromeTools:
         # 添加当前页面列表
         if tool_name not in ['list_pages', 'new_page', 'navigate_page', 'select_page', 'close_page']:
             tool_call_result_content.text = await self.append_page_list(tool_call_result_content.text)
+
+        # 如果是截图的话,那就把图片的base64作为返回值
+        if tool_name == 'take_screenshot':
+            import re
+            logger.info(f'take_screenshot: {tool_call_result_content.text}')
+            pattern = r'Saved screenshot to\s+([^\n]+?\.png)'
+            match = re.search(pattern, tool_call_result_content.text)
+            if match:
+                screenshot_path = match.group(1).strip()
+                logger.info(f'开始读取图片文件: {screenshot_path}')
+                png_base64 = await read_png(screenshot_path)
+                tool_call_result_content.text = f'data:image/png;base64,{png_base64}'
 
     async def append_page_list(
             self,
@@ -206,3 +217,7 @@ def lightweight_ally(
     except Exception as e:
         logger.error(f'处理ally_text时出错: {e}')
         raise
+
+
+if __name__ == '__main__':
+    pass

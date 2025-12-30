@@ -40,18 +40,18 @@ mcp_service_manager = McpServiceManager(
         # },
 
         # word 服务
-        "word-document-server": {
-            "transport": "stdio",
-            "command": "/Users/macbook0000/PycharmProjects/Office-Word-MCP-Server/.venv/bin/python",
-            "description": "Microsoft Word文档自动化工具,用于创建、读取和操作Microsoft Word文档",
-            "args": [
-                "/Users/macbook0000/PycharmProjects/Office-Word-MCP-Server/word_mcp_server.py"
-            ],
-            "env": {
-                "PYTHONPATH": "/Users/macbook0000/PycharmProjects/Office-Word-MCP-Server",
-                "MCP_TRANSPORT": "stdio"
-            }
-        }
+        # "word-document-server": {
+        #     "transport": "stdio",
+        #     "command": "/Users/macbook0000/PycharmProjects/Office-Word-MCP-Server/.venv/bin/python",
+        #     "description": "Microsoft Word文档自动化工具,用于创建、读取和操作Microsoft Word文档",
+        #     "args": [
+        #         "/Users/macbook0000/PycharmProjects/Office-Word-MCP-Server/word_mcp_server.py"
+        #     ],
+        #     "env": {
+        #         "PYTHONPATH": "/Users/macbook0000/PycharmProjects/Office-Word-MCP-Server",
+        #         "MCP_TRANSPORT": "stdio"
+        #     }
+        # }
 
     }
 )
