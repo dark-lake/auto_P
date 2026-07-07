@@ -2,16 +2,21 @@ import asyncio
 import json
 import os
 import re
+import uuid
 from datetime import datetime
 
 import aiofiles
+from dotenv import load_dotenv
 from mcp import ClientSession
 from mcp.types import CallToolResult
 from openai.types.beta.threads.runs import ToolCall
 
+from auto_p_llm.doubao_file import doubao_upload_file
 from auto_p_services.chrome_mcp.page_tools import PageTools
 from auto_p_utils.logger_util import logger
 from auto_p_utils.os_util import save_file
+
+load_dotenv()
 
 
 class ChromeTools:
@@ -36,7 +41,14 @@ class ChromeTools:
         # 获取工具调用数据
         tool_name = tool_call.function.name
         tool_args = json.loads(tool_call.function.arguments)
-        tool_call_result = await self.server.call_tool(tool_name, tool_args)
+
+        print(f'tool_arags: {type(tool_args)}\n{tool_args}')
+
+        # 特殊类型的工具单独处理,例如截图
+        if tool_name in ['take_screenshot']:
+            tool_call_result = await self.take_screenshot_process(tool_name, tool_args)
+        else:
+            tool_call_result = await self.server.call_tool(tool_name, tool_args)
 
         tool_call_result_content = tool_call_result.content[0] if tool_call_result.content else None
 
@@ -52,6 +64,33 @@ class ChromeTools:
             tool_call_result_content.text = await self.append_page_list(tool_call_result_content.text)
 
         return tool_call_result
+
+    async def take_screenshot_process(self, tool_name, tool_args) -> CallToolResult:
+        """处理截图工具调用,需要特殊处理, 1.保存图片,2.重构"""
+
+        new_tool_args = {}
+        # 设置截图保存的默认参数
+        file_path = os.getenv("IMG_PATH") + str(uuid.uuid4().hex)
+        format = "jpeg"
+        full_page = False
+        quality = 65
+        # uid 忽略
+
+        new_tool_args['filePath'] = file_path
+        new_tool_args['format'] = format
+        new_tool_args['fullPage'] = full_page
+        new_tool_args['quality'] = quality
+        tool_invoke_result = await self.server.call_tool(tool_name, new_tool_args)
+        print(f'截图调用结果:{tool_invoke_result}')
+
+        # 上传云平台
+        file_id = await doubao_upload_file(file_path + '.' + format)
+        print(f'上传后ID为:{file_id}')
+
+        # 修改call_result中的值
+        tool_invoke_result.content[0].text = file_id
+        print(f'截图调用结果:{tool_invoke_result}')
+        return tool_invoke_result
 
     async def append_page_list(
             self,

@@ -24,7 +24,7 @@ mcp_service_manager = McpServiceManager(
             "description": "浏览器自动化工具（如打开页面、跳转、输入、点击等）",
             # "unified_output_func": "",
             "args": [
-                "/Users/macbook0000/Downloads/chrome-devtools-mcp-chrome-devtools-mcp-v0.11.0/chrome-devtools-mcp-chrome-devtools-mcp-v0.11.0/build/src/index.js",
+                "/Users/macbook0000/Downloads/chrome-devtools-mcp-chrome-devtools-mcp-v1.5.0/build/src/bin/chrome-devtools-mcp.js",
                 # f"--user-data-dir={os.getenv("USER_DATA_DIR")}",
             ]
         },

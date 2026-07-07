@@ -1,3 +1,5 @@
+import re
+
 from dotenv import load_dotenv
 from mcp import ClientSession
 from mcp.types import CallToolResult
@@ -66,20 +68,26 @@ def build_page(
     """
     logger.info(f'开始转换页面结果...')
     build_pages = []
+    pattern = r'^(\d+):\s*(.*?)\s*\((https?://.*?)\)\s*(?:\[(.*?)\])?$'
+
     if list_pages_result.content:
         # text='# list_pages response\n## Pages\n0: https://www.bilibili.com/\n1: https://www.baidu.com/ [selected]
         str_res = list_pages_result.content[0].text
         page_list = str_res.split('\n')[2:]  # 排除掉前两个标题部分
         for page in page_list:
+            logger.info(f'已页面信息:{page}')
             # 1: https://www.baidu.com/ [selected]
-            split_page = page.split(' ')
-            index = split_page[0][0]
-            url = split_page[1].strip()
-            is_selected = False
-            if len(split_page) > 2 and split_page[2].strip() == '[selected]':
-                is_selected = True
-            # 添加page对象
-            build_pages.append(AutoPPage(index=index, title=url, url=url, is_selected=is_selected))
+            match = re.match(pattern, page)
+            if match:
+                index, title, url, status = match.groups()
+                is_selected = True if status == 'selected' else False
+                # 添加page对象
+                auto_p_page = AutoPPage(index=index, title=title, url=url, is_selected=is_selected)
+                logger.info(f'转换后page对象:{auto_p_page.model_dump_json()}')
+                build_pages.append(auto_p_page)
+            else:
+                logger.info(f'转换页面失败:{page}')
+
     return build_pages
 
 

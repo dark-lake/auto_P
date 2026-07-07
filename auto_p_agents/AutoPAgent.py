@@ -163,7 +163,7 @@ class AutoProcessAgent:
         user_message = AutoPMessage(
             role="user",
             content=[AutoPContentItem(
-                type="text",
+                type="input_text",
                 text=message
             )]
         )
@@ -187,7 +187,7 @@ class AutoProcessAgent:
             system_prompt = AutoPMessage(
                 role="system",
                 content=[AutoPContentItem(
-                    type="text",
+                    type="input_text",
                     text=build_system_prompt
                 )]
             )
@@ -203,15 +203,28 @@ class AutoProcessAgent:
             call_id = ""
             tool_name = ""
 
+            # logger.info(f'------------------------------------------------------')
+            # for i,kkk in enumerate(self.chat_history + list(chat_history.values())):
+            #     logger.info(f'{i+1}-->{kkk.model_dump()}')
+            #     logger.info(f'{i+1}-->{kkk.model_dump(exclude_defaults=True)}')
+            # logger.info(f'------------------------------------------------------')
+
+            payload = [
+                x.model_dump(mode="json")
+                for x in (self.chat_history + list(chat_history.values()))
+            ]
+
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+
             stream = await self.openai.responses.create(
                 model=os.getenv("CHAT_OPEN_MODEL"),
-                input=self.chat_history + list(chat_history.values()),
+                input=payload,
                 temperature=0.95,
                 stream=True,
-                stream_options={
-                    "include_usage": True,
-                    "chunk_include_usage": True,
-                },
+                # stream_options={
+                #     "include_usage": True,
+                #     "chunk_include_usage": True,
+                # },
                 extra_body={
                     "thinking": {
                         "type": "disabled"  # 不使用深度思考能力
@@ -235,7 +248,7 @@ class AutoProcessAgent:
                         final_text += event.delta
                         yield response
 
-                        # ---- 工具调用开始（示例）----
+                    # ---- 工具调用开始（示例）----
                     elif event.type == "response.output_item.added":
                         if event.item.type == "message":
                             # 记录assistant content
@@ -243,7 +256,7 @@ class AutoProcessAgent:
                                 role="assistant",
                                 content=[
                                     AutoPContentItem(
-                                        type="text",
+                                        type="input_text",
                                         text=""
                                     )
                                 ]
@@ -294,7 +307,8 @@ class AutoProcessAgent:
                             auto_p_tool_call_result = AutoPToolCallResult(
                                 type="function_call_output",
                                 output=f'工具{tool_name}参数解析异常: {e}, 请检查参数是否正确',
-                                call_id=call_id
+                                call_id=call_id,
+                                status="failed"
                             )
                             await self._process_event(auto_p_tool_call_result, event, chat_history,
                                                       chat_messages_container, response)
@@ -321,9 +335,10 @@ class AutoProcessAgent:
                             output = json.dumps(result.structuredContent, ensure_ascii=False)
                         auto_p_tool_call_result = AutoPToolCallResult(
                             type="function_call_output",
-                            name=tool_name,
+                            # name=tool_name,
                             output=output,
-                            call_id=call_id
+                            call_id=call_id,
+                            status="completed",
                         )
                         await self._process_event(auto_p_tool_call_result, event, chat_history, chat_messages_container,
                                                   response)
@@ -332,7 +347,7 @@ class AutoProcessAgent:
 
                     # ---- 最终文本 ----
                     elif event.type == "response.output_item.done":
-                        pass
+                        chat_history[event.item.id].status = "completed"
 
                     # ---- 整个 response 完成 ----
                     elif event.type == "response.completed":
