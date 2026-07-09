@@ -141,6 +141,7 @@ class AutoProcessAgent:
 
         logger.info(f"对话历史为: \n{self.conv.chat_history}")
 
+        react_round = 0
         while not chat_stop:
             # ── 中断检查 ──
             if self._cancel_event.is_set():
@@ -163,9 +164,9 @@ class AutoProcessAgent:
             payload = self.conv.build_payload()
 
             # 动态推理：doubao-seed-1-6-flash 只支持 enabled/disabled
-            # 简单任务（短消息、单步操作）→ disabled 快速响应
-            # 复杂任务（长消息、多步骤、搜索/查找/对比等关键词）→ enabled 深度推理
-            thinking_type = self._decide_thinking(message, len(self.conv.chat_history))
+            # 第0轮（通常是 get_tool_schema）：需要规划工具和并行策略 → enabled
+            # 后续轮次（工具执行阶段）：模型只需看结果决定下一步 → disabled
+            thinking_type = self._decide_thinking(message, react_round)
 
             stream = await self.openai.responses.create(
                 model=config.chat_model_for_api,
@@ -290,52 +291,71 @@ class AutoProcessAgent:
                         if event.item.id in self.conv.current_turn:
                             self.conv.current_turn[event.item.id].status = "completed"
 
-            # ---- 流结束后：批量执行本轮收集的所有工具调用 ----
-            for item_id, call_id, tool_name, tool_args, event in pending_executions:
-                # ── 中断检查：每个工具执行前 ──
+            # ---- 流结束后：并行执行本轮收集的所有工具调用 ----
+            if pending_executions:
+                tool_names_list = [t[2] for t in pending_executions]
+                logger.info(f"并行执行 {len(pending_executions)} 个工具: {tool_names_list}")
+
+                # ── 中断检查 ──
                 if self._cancel_event.is_set():
-                    logger.info(f"检测到取消信号，跳过工具 {tool_name}")
-                    result_item = AutoPToolCallResult(
-                        type="function_call_output", name=tool_name,
-                        output="⏹ 执行已被用户中断，跳过此工具调用",
-                        call_id=call_id, status="completed",
-                    )
-                    self.conv.handle_event(result_item, event)
+                    logger.info("检测到取消信号，跳过本轮全部工具调用")
+                    for item_id, call_id, tool_name, tool_args, event in pending_executions:
+                        result_item = AutoPToolCallResult(
+                            type="function_call_output", name=tool_name,
+                            output="⏹ 执行已被用户中断，跳过此工具调用",
+                            call_id=call_id, status="completed",
+                        )
+                        self.conv.handle_event(result_item, event)
                     yield response_view
-                    continue
+                else:
+                    # 并行执行所有工具（执行阶段无共享状态修改，安全并行）
+                    async def _exec_one(_call_id, _tool_name, _tool_args):
+                        tool_call = FunctionToolCall(
+                            id=_call_id,
+                            function=Function(
+                                name=_tool_name,
+                                arguments=json.dumps(_tool_args, ensure_ascii=False),
+                            ),
+                            type="function",
+                        )
+                        try:
+                            exec_result = await self.execute_tool(tool_call)
+                            return self._extract_tool_output(exec_result)
+                        except Exception as e:
+                            logger.error(f"工具 {_tool_name} 执行异常: {type(e).__name__}: {e}")
+                            return f"工具 {_tool_name} 执行异常: {e}"
 
-                tool_call = FunctionToolCall(
-                    id=call_id,
-                    function=Function(
-                        name=tool_name,
-                        arguments=json.dumps(tool_args, ensure_ascii=False),
-                    ),
-                    type="function",
-                )
+                    exec_outputs = await asyncio.gather(*[
+                        _exec_one(call_id, tool_name, tool_args)
+                        for item_id, call_id, tool_name, tool_args, event in pending_executions
+                    ])
 
-                exec_result = await self.execute_tool(tool_call)
-                output = self._extract_tool_output(exec_result)
-                result_item = AutoPToolCallResult(
-                    type="function_call_output", name=tool_name,
-                    output=output, call_id=call_id, status="completed",
-                )
-                self.conv.handle_event(result_item, event)
+                    # 顺序处理结果（更新对话状态和 UI）
+                    for (item_id, call_id, tool_name, tool_args, event), output in \
+                            zip(pending_executions, exec_outputs):
+                        result_item = AutoPToolCallResult(
+                            type="function_call_output", name=tool_name,
+                            output=output, call_id=call_id, status="completed",
+                        )
+                        self.conv.handle_event(result_item, event)
 
-                # 截图工具：将图片注入对话，让模型下一轮能直接进行视觉分析
-                raw_file_id = output.split('\n')[0].strip()
-                if tool_name == 'take_screenshot' and raw_file_id.startswith('file-'):
-                    img_msg = AutoPMessage(
-                        role="user",
-                        content=[
-                            AutoPContentItem(type="input_text",
-                                             text="截图已完成，以下是当前页面的截图，请基于截图内容进行视觉分析："),
-                            AutoPIMGContentItem(type="input_image", file_id=raw_file_id, detail="high"),
-                        ],
-                    )
-                    self.conv.current_turn[f"img_{call_id}"] = img_msg
-                    logger.info(f"已将截图 {raw_file_id} 注入对话历史，供模型视觉分析")
+                        # 截图工具：将图片注入对话，让模型下一轮能直接进行视觉分析
+                        raw_file_id = output.split('\n')[0].strip()
+                        if tool_name == 'take_screenshot' and raw_file_id.startswith('file-'):
+                            img_msg = AutoPMessage(
+                                role="user",
+                                content=[
+                                    AutoPContentItem(type="input_text",
+                                                     text="截图已完成，以下是当前页面的截图，请基于截图内容进行视觉分析："),
+                                    AutoPIMGContentItem(type="input_image", file_id=raw_file_id, detail="high"),
+                                ],
+                            )
+                            self.conv.current_turn[f"img_{call_id}"] = img_msg
+                            logger.info(f"已将截图 {raw_file_id} 注入对话历史，供模型视觉分析")
 
-                yield response_view
+                        yield response_view
+
+            react_round += 1
 
             # 无工具调用时，任务完成
             if not pending_executions:
@@ -438,17 +458,17 @@ class AutoProcessAgent:
         return [convert_tool(t) for t in self.mcp.all_tools]
 
     @staticmethod
-    def _decide_thinking(message: str, history_len: int) -> str:
+    def _decide_thinking(message: str, react_round: int) -> str:
         """根据任务复杂度动态决定是否启用推理。
 
         doubao-seed-1-6-flash 只支持 enabled / disabled（不支持 auto）。
         规则：
-          - 第一个工具调用后的后续轮次 → disabled（执行阶段，不需要再思考）
-          - 用户消息很短（≤8字）且不含多步关键词 → disabled
-          - 否则 → enabled
+          - 第0轮（通常是 get_tool_schema 规划阶段）→ enabled，让模型规划并行调用策略
+          - 后续轮次（工具执行阶段）→ disabled，快速执行
+          - 但第0轮如果是极简单任务（短消息、单步操作）→ disabled 快速响应
         """
         # 后续 ReAct 轮次：工具已执行完，模型只需看结果决定下一步，不需要深度推理
-        if history_len > 0:
+        if react_round > 0:
             return "disabled"
 
         # 首轮：根据用户消息复杂度判断

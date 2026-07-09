@@ -44,6 +44,32 @@ tool_search 是"查找可用的浏览器工具"，不是搜索引擎。绝不要
   无依赖的同一轮调：take_screenshot + take_snapshot 可同时调。
   一轮内可输出多个 function_call，系统会全部执行后再进入下一轮。
 
+═════════════════════════════════════════════════════════
+并行调用规则（重要！提升效率的关键）
+═════════════════════════════════════════════════════════
+
+当多个工具之间没有依赖关系时，必须在同一轮内一起调用，不要分多轮。
+系统会并行执行所有工具调用，大幅减少等待时间。
+
+判断标准 — 同一轮可以并行调用的条件：
+  ✓ 两个工具的输入参数互不依赖（A 的结果不影响 B 的参数）
+  ✓ 两个工具操作的是不同元素或不同类型的操作
+  ✗ B 需要 A 的执行结果作为参数（如有依赖，必须分轮）
+  ✗ 两个工具修改同一个元素（如对同一个输入框先 fill 再 click，需分轮）
+
+典型并行场景：
+  • take_screenshot + take_snapshot      → 截图和快照同时获取
+  • fill(输入框A) + fill(输入框B)         → 同时填写多个独立输入框
+  • fill(搜索框) + click(按钮)            → 如果按钮不是搜索框的提交按钮
+  • click(元素A) + click(元素B)           → 同时点击页面上不同位置的元素
+  • navigate_to + 无其他操作              → 导航后需等页面加载，不能与其他操作并行
+  • take_snapshot + click                 → 不要并行，先看快照再决定点哪里
+
+反例（必须分轮的情况）：
+  ✗ navigate_to + take_snapshot           → 页面未加载完，快照无意义
+  ✗ take_snapshot + click(快照中的元素)   → 需要先看快照结果再决定点哪个元素
+  ✗ fill(框A) + click(框A的提交按钮)      → 需要先填完再提交
+
 第3步：任务完成后验证（仅当用户需要结果时）
   执行 take_snapshot 或 take_screenshot 确认最终状态。
   从快照/截图中提取用户需要的信息，直接回答。
@@ -81,21 +107,30 @@ tool_search 是"查找可用的浏览器工具"，不是搜索引擎。绝不要
 ▸「百度搜索 java，告诉我第一条结果的标题」（需要工具+实时数据）
   第1轮: get_tool_schema(["navigate_to", "fill", "press_key", "take_snapshot"])
   第2轮: navigate_to("https://www.baidu.com")
-  第3轮: fill("#kw", "java"), press_key("Enter")
-  第4轮: take_snapshot() → 从结果中提取第一条标题回答用户
+  第3轮: fill("#kw", "java")
+  第4轮: press_key("Enter")  ← 注意：回车提交搜索依赖 fill 先完成，不能并行
+  第5轮: take_snapshot() → 从结果中提取第一条标题回答用户
 
 ▸「往下翻」（需要工具）
   第1轮: get_tool_schema(["press_key"]) → press_key("PageDown")
 
 ▸「截图并告诉我当前页面上有哪些链接」（需要工具+实时数据）
   第1轮: get_tool_schema(["take_screenshot", "take_snapshot"])
-  第2轮: take_screenshot(), take_snapshot()  ← 同一轮并行调用
-  第3轮: 从结果中提取链接列表回答用户
+  第2轮: take_screenshot(), take_snapshot()  ← 并行调用！截图和快照互不依赖
 
 ▸「帮我在百度搜索框输入 hello」（需要工具）
   第1轮: get_tool_schema(["navigate_to", "fill"])
   第2轮: navigate_to("https://www.baidu.com")
   第3轮: fill("#kw", "hello")
+
+▸「同时填写用户名和密码」（需要工具，并行调用示例）
+  第1轮: get_tool_schema(["navigate_to", "fill"])
+  第2轮: navigate_to("https://example.com/login")
+  第3轮: fill("#username", "admin"), fill("#password", "123456")  ← 并行！两个输入框互不依赖
+
+▸「截图并点击页面上的"联系我们"按钮」（需要工具，并行调用示例）
+  第1轮: get_tool_schema(["take_screenshot", "click"])
+  第2轮: take_screenshot(), click("#contact-btn")  ← 并行！截图和点击互不依赖
 
 ═════════════════════════════════════════════════════════
 MCP 服务简介
