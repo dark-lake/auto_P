@@ -136,6 +136,30 @@ footer { display: none !important; }
     color: #ffffff !important;
     border-color: #da3633 !important;
 }
+
+/* ============================================================
+   加载动画（打字气泡）
+   ============================================================ */
+.typing-indicator {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 0;
+}
+.typing-indicator span {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #8b949e;
+    animation: typing-bounce 1.4s infinite ease-in-out both;
+}
+.typing-indicator span:nth-child(1) { animation-delay: 0s; }
+.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes typing-bounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+}
 """
 
 
@@ -186,6 +210,9 @@ def gradio_interface() -> gr.Blocks:
             connect_btn = gr.Button("🔌 连接", variant="secondary", size="sm")
             clear_btn = gr.Button("🗑 清空", variant="secondary", size="sm")
 
+        # ── 加载动画 HTML ──
+        LOADING_HTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>'
+
         # ── 事件 ──
 
         async def handle_submit(message: str, history: list):
@@ -197,7 +224,30 @@ def gradio_interface() -> gr.Blocks:
                 return
 
             async for result in client.process_message(message, history):
-                yield result
+                new_history, cleared_msg = result
+                base_len = len(history)
+
+                # 过滤掉 base_len 之后的空 assistant 消息
+                # 并检查是否已有带内容的 assistant 消息
+                filtered = list(new_history[:base_len])
+                has_assistant_content = False
+                for i in range(base_len, len(new_history)):
+                    item = new_history[i]
+                    role = (item.get("role") if isinstance(item, dict)
+                            else getattr(item, "role", None))
+                    content = str(item.get("content", "") if isinstance(item, dict)
+                                  else getattr(item, "content", ""))
+                    if role == "assistant" and not content.strip():
+                        continue  # 过滤掉空 assistant
+                    if role == "assistant":
+                        has_assistant_content = True
+                    filtered.append(item)
+
+                # 仅当没有任何带内容的 assistant 消息时才显示加载动画
+                if not has_assistant_content:
+                    filtered.append({"role": "assistant", "content": LOADING_HTML})
+
+                yield filtered, cleared_msg
 
         def handle_stop():
             """中断正在执行的任务。"""

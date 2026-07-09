@@ -193,7 +193,7 @@ class AutoProcessAgent:
                                 content=[AutoPContentItem(type="input_text", text="")],
                             )
                             self.conv.handle_event(item, event)
-                            yield response_view
+                            # 不 yield：空 assistant 消息留给 output_text.delta 填充后再展示
                         elif event.item.type == "function_call":
                             item = AutoPToolCall(
                                 type="function_call", arguments="",
