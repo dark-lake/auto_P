@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from typing import List, Any, Callable, AsyncGenerator
@@ -51,6 +52,7 @@ class AutoProcessAgent:
         self.chrome_tools: ChromeTools | None = None
         self.tool_searcher: ToolSearcher | None = None
         self._processing: bool = False  # 防重入
+        self._cancel_event = asyncio.Event()  # 中断信号
 
     # -- 连接管理 (代理到 MCPConnector) --
 
@@ -77,6 +79,16 @@ class AutoProcessAgent:
             f"共{len(services)}个服务."
         )
 
+    # -- 中断控制 --
+
+    def cancel_execution(self) -> str:
+        """外部调用：向当前执行中的 generator 发送取消信号。"""
+        if not self._processing:
+            return "当前没有正在执行的任务"
+        self._cancel_event.set()
+        logger.info("⚠️ 用户请求中断执行")
+        return "已发送中断信号，将在当前步骤完成后停止"
+
     # -- 消息入口 -- 
 
     async def process_message(
@@ -102,11 +114,13 @@ class AutoProcessAgent:
             return
 
         self._processing = True
+        self._cancel_event.clear()
         try:
             async for msg in self._process_query(message, history):
                 yield history + msg, ""
         finally:
             self._processing = False
+            self._cancel_event.clear()
 
     async def _process_query(
             self, message: str, history: List[Any]
@@ -128,6 +142,20 @@ class AutoProcessAgent:
         logger.info(f"对话历史为: \n{self.conv.chat_history}")
 
         while not chat_stop:
+            # ── 中断检查 ──
+            if self._cancel_event.is_set():
+                logger.info("检测到取消信号，中断 ReAct 循环")
+                cancel_msg_id = f"cancel_{int(time.time() * 1000)}"
+                cancel_think = ChatMessage(
+                    role="assistant",
+                    content="⏹ **执行已被用户中断**",
+                    metadata={"title": "中断", "id": cancel_msg_id, "status": "done"},
+                )
+                self.conv.page_containers[cancel_msg_id] = cancel_think
+                self.conv.page_response.append(cancel_think)
+                yield response_view
+                break
+
             pending_executions = []  # [(item_id, call_id, tool_name, tool_args, event)]
             thinking_text = ""
             thinking_eid: str | None = None
@@ -264,6 +292,18 @@ class AutoProcessAgent:
 
             # ---- 流结束后：批量执行本轮收集的所有工具调用 ----
             for item_id, call_id, tool_name, tool_args, event in pending_executions:
+                # ── 中断检查：每个工具执行前 ──
+                if self._cancel_event.is_set():
+                    logger.info(f"检测到取消信号，跳过工具 {tool_name}")
+                    result_item = AutoPToolCallResult(
+                        type="function_call_output", name=tool_name,
+                        output="⏹ 执行已被用户中断，跳过此工具调用",
+                        call_id=call_id, status="completed",
+                    )
+                    self.conv.handle_event(result_item, event)
+                    yield response_view
+                    continue
+
                 tool_call = FunctionToolCall(
                     id=call_id,
                     function=Function(

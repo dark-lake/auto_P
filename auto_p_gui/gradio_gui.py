@@ -131,6 +131,11 @@ footer { display: none !important; }
     color: #ffffff !important;
     border-color: #238636 !important;
 }
+.gradio-container button.stop {
+    background: #da3633 !important;
+    color: #ffffff !important;
+    border-color: #da3633 !important;
+}
 """
 
 
@@ -166,6 +171,9 @@ def gradio_interface() -> gr.Blocks:
             submit_btn = gr.Button(
                 "发送", variant="primary", scale=0, min_width=55,
             )
+            stop_btn = gr.Button(
+                "⏹ 停止", variant="stop", scale=0, min_width=55,
+            )
 
         status = gr.Textbox(
             value="⚫ 未连接",
@@ -191,6 +199,10 @@ def gradio_interface() -> gr.Blocks:
             async for result in client.process_message(message, history):
                 yield result
 
+        def handle_stop():
+            """中断正在执行的任务。"""
+            return client.cancel_execution()
+
         connect_btn.click(fn=client.connect_by_config, outputs=[status])
 
         msg.submit(
@@ -204,6 +216,10 @@ def gradio_interface() -> gr.Blocks:
             inputs=[msg, chatbot],
             outputs=[chatbot, msg],
             concurrency_limit=3,
+        )
+        stop_btn.click(
+            fn=handle_stop,
+            outputs=[status],
         )
 
         clear_btn.click(
