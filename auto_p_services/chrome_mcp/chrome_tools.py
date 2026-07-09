@@ -13,6 +13,7 @@ from openai.types.beta.threads.runs import ToolCall
 
 from auto_p_llm.doubao_file import doubao_upload_file
 from auto_p_services.chrome_mcp.page_tools import PageTools
+from auto_p_utils.config import config
 from auto_p_utils.logger_util import logger
 from auto_p_utils.os_util import save_file
 
@@ -70,7 +71,7 @@ class ChromeTools:
 
         new_tool_args = {}
         # 设置截图保存的默认参数
-        file_path = os.getenv("IMG_PATH") + str(uuid.uuid4().hex)
+        file_path = os.path.join(config.img_path, str(uuid.uuid4().hex))
         format = "jpeg"
         full_page = False
         quality = 65
