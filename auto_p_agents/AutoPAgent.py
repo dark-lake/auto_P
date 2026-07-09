@@ -1,419 +1,313 @@
-import asyncio
 import json
-import os
 import time
-import uuid
-from collections.abc import Iterable
-from contextlib import AsyncExitStack
-from typing import List, Dict, Any, Union, Callable, Generator, AsyncGenerator
+from typing import List, Any, Callable, AsyncGenerator
 
 import aiofiles
 from dotenv import load_dotenv
 from gradio.components.chatbot import ChatMessage
-from mcp import ClientSession, StdioServerParameters, Tool
-from mcp.client.stdio import stdio_client
+from mcp import ClientSession, Tool
 from mcp.types import CallToolResult
 from openai import AsyncOpenAI
 from openai.types.beta.threads.runs import ToolCall
 from openai.types.beta.threads.runs.function_tool_call import Function, FunctionToolCall
-from openai.types.responses import ResponseStreamEvent
 
-from auto_p_gui.message_items.message_models import AutoPModel, AutoPMessage, AutoPContentItem, AutoPToolCall, \
-    AutoPToolCallResult
+from auto_p_agents.conversation_manager import ConversationManager
+from auto_p_agents.mcp_connector import MCPConnector
+from auto_p_gui.message_items.message_models import (
+    AutoPMessage, AutoPContentItem, AutoPIMGContentItem,
+    AutoPToolCall, AutoPToolCallResult,
+)
 from auto_p_prompts.prompts import auto_p_prompts as auto_p_prompts
-from auto_p_prompts.prompts_manager import PromptsManager
+from auto_p_prompts.prompts_manager import fill_prompt
 from auto_p_services.McpServiceManager import McpServiceManager
 from auto_p_services.auto_p import auto_p_tools
 from auto_p_services.chrome_mcp.chrome_tools import ChromeTools
 from auto_p_services.mcp_services_config import mcp_service_manager
+from auto_p_utils.config import config
 from auto_p_utils.logger_util import logger
-from auto_p_utils.os_util import response_convert_tool
+from auto_p_utils.os_util import convert_tool
 from auto_p_vector.vector_processor import ToolSearcher
 
 load_dotenv()
 
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
+CHROME_DEVTOOLS_SERVICE = "chrome-devtools"
 
 
 class AutoProcessAgent:
+    """基于 LLM 的浏览器自动化 Agent。
+
+    委托 MCPConnector 管理 MCP 连接，ConversationManager 管理对话历史，
+    自身负责 LLM 调用、工具路由和 ReAct 循环。
+    """
+
     def __init__(self):
-        self.session = None
         self.openai = AsyncOpenAI(
-            api_key=os.getenv("CHAT_API_KEY"),
-            base_url=os.getenv("CHAT_BASE_URL"),
-            timeout=120,
+            api_key=config.chat_api_key,
+            base_url=config.chat_base_url,
+            timeout=config.chat_timeout,
         )
-        self.chrome_tools: ChromeTools | None = None  # 浏览器工具
-        self.chat_history: list[AutoPModel] = []  # 全局对话历史
-        self.servers = {}  # 存所有 server session server_name -> server_session
-        self.servers_McpService: dict[str, McpServiceManager.McpService] = {}  # mcp服务列表 server_name -> McpService
-        self.tool_service_map = {}  # tool_name → server_name 映射
-        self.tools = []  # 处理后的工具,可直接发送给大模型
-        self.exit_stack = AsyncExitStack()
-        self.prompts_manager = PromptsManager()  # 提示词管理器,负责提示词的构建
+        self.mcp = MCPConnector()
+        self.conv = ConversationManager()
+        self.chrome_tools: ChromeTools | None = None
         self.tool_searcher: ToolSearcher | None = None
+        self._processing: bool = False  # 防重入
 
-    async def _connect_to_server(
-            self,
-            mcp_service: 'McpServiceManager.McpService'
-    ) -> None:
-        """
-        链接到具体的mcp server
-        :param mcp_service: mcp_service 配置对象,需要具体connect才能使用
-        """
-        if not mcp_service.args:
-            raise ValueError("服务脚本py/js必须指定其绝对路径")
-        is_python = mcp_service.args[0].endswith('.py')
-        is_js = mcp_service.args[0].endswith('.js')
-        if not (is_python or is_js):
-            raise ValueError("服务脚本必须是python或js文件")
+    # -- 连接管理 (代理到 MCPConnector) --
 
-        server_params = StdioServerParameters(
-            command=mcp_service.command,
-            args=(mcp_service.args or []),
-            env={"PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
-        )
-        if mcp_service.transport == 'stdio':
-            stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
-            stdio, write = stdio_transport
-            session = await self.exit_stack.enter_async_context(ClientSession(stdio, write))
+    async def _connect_to_server(self, mcp_service: "McpServiceManager.McpService") -> None:
+        await self.mcp.connect(mcp_service)
+        await self._init_tool_searcher()
 
-            await session.initialize()
-            list_tools_result = await session.list_tools()
-            tools = list_tools_result.tools
-            # 保存mcp服务
-            self.servers[mcp_service.name] = session
-            # 保存每个工具与其服务名的映射, 并将转换后的工具保存
-            for tool in tools:
-                self.tool_service_map[tool.name] = mcp_service.name
-                self.tools.append(tool)
-            logger.info(f"{mcp_service.name}服务中工具列表(共{len(tools)}个)为:{[tool.name for tool in tools]}")
-        # 将当前服务的McpService对象保存
-        self.servers_McpService[mcp_service.name] = mcp_service
+    async def _init_tool_searcher(self) -> None:
+        if not config.enable_tool_search or self.tool_searcher:
+            return
+        logger.info("开始构建工具搜索器...")
+        all_tools = await self.mcp.get_non_official_tools_async()
+        self.tool_searcher = ToolSearcher(all_tools)
+        await self.tool_searcher.sync_tools()
 
-        # 初始化工具搜索器
-        await self.init_tool_searcher()
-
-    async def init_tool_searcher(
-            self
-    ) -> None:
-        """构建工具搜索器"""
-        if not self.tool_searcher and os.getenv("ENABLE_TOOL_SEARCH", "false") == "true":
-            logger.info(f'开始构建工具搜索器...')
-            # 构建工具搜索器
-            all_tools: list[Tool] = []
-            for service_name, session in self.servers.items():
-                # auto_p-tools 属于官方工具,不需要添加
-                if os.getenv('OFFICIAL_SERVICE_NAMES') == service_name:
-                    continue
-                list_tools_result = await session.list_tools()
-                all_tools.extend(list_tools_result.tools)
-
-            self.tool_searcher = ToolSearcher(all_tools)
-            # 增量更新:检测工具的新增、修改、删除
-            await self.tool_searcher.sync_tools()
-
-    def connect_by_config(
-            self
-    ) -> str:
-        """
-        通过mcp_service_config.py中配置的mcp服务进行链接
-        :return:
-        """
-        mcp_service_list: list[McpServiceManager.McpService] = mcp_service_manager.get_mcp_services()
-        for service in mcp_service_list:
+    async def connect_by_config(self) -> str:
+        services = mcp_service_manager.get_mcp_services()
+        for service in services:
             logger.info(f"开始链接服务: {service.name}")
-            loop.run_until_complete(self._connect_to_server(mcp_service=service))
+            await self._connect_to_server(mcp_service=service)
             logger.info(f"成功链接到 {service.name} 服务!")
-        return f'MCP 服务连接成功, {', '.join(service.name for service in mcp_service_list)}, 共{len(mcp_service_list)}个服务.'
+        return (
+            f"MCP 服务连接成功, {', '.join(s.name for s in services)}, "
+            f"共{len(services)}个服务."
+        )
 
-    def process_message(
-            self,
-            message: str,
-            history: List[Union[Dict[str, Any], ChatMessage]]
-    ) -> Generator[tuple[list[dict[str, Any] | ChatMessage], str], Any, None]:
-        # 添加用户输入
-        async_gen = self._process_query(message, history)
-        while True:
-            try:
-                msg = loop.run_until_complete(async_gen.__anext__())
+    # -- 消息入口 -- 
+
+    async def process_message(
+            self, message: str, history: List[Any]
+    ) -> AsyncGenerator[tuple, Any]:
+        # 空输入拦截：提示用户输入内容
+        if not message or not message.strip():
+            if history:
+                history.append({
+                    "role": "assistant",
+                    "content": "❓ 你想让我做什么？比如：\"打开百度搜索 Python\"。",
+                })
+                yield history, ""
+            return
+
+        # 防重入：正在处理上一个请求时拒绝新请求
+        if self._processing:
+            history.append({
+                "role": "assistant",
+                "content": "⏳ 正在处理中，请稍候...",
+            })
+            yield history, ""
+            return
+
+        self._processing = True
+        try:
+            async for msg in self._process_query(message, history):
                 yield history + msg, ""
-            except StopAsyncIteration:
-                break
+        finally:
+            self._processing = False
 
     async def _process_query(
-            self,
-            message: str,
-            history: List[Union[Dict[str, Any], ChatMessage]]
-    ) -> AsyncGenerator[list[Any], Any]:
-
-        # 返回的消息数组, 第一个chat message是用于content输出,后面的内容都是用来tool输出
-        response = []
-        # 用于记录所有assistant的content, 单次对话的对话历史
-        chat_history: dict[str, AutoPModel] = {}  # chat_history dict[event.item.id, item]
-        # 用于页面展示
-        chat_messages_container: dict[str, ChatMessage] = {}  # chat_messages_container
-        # 构建工具的json schema
-        tools = await self.build_tools_schema()
-        # 标记聊天是否结束
+            self, message: str, history: List[Any]
+    ) -> AsyncGenerator[list, Any]:
+        tools_schema = await self._build_tools_schema()
         chat_stop = False
 
-        # 插入用户
-        user_message = AutoPMessage(
-            role="user",
-            content=[AutoPContentItem(
-                type="input_text",
-                text=message
-            )]
-        )
-        # 展示到页面上
-        id = str(uuid.uuid4())
-        chat_messages_container['user_' + id] = ChatMessage(role=user_message.role,
-                                                            content=user_message.content[0].text)
-        response.append(chat_messages_container['user_' + id])
-        yield response
-        # 添加一个assistant的页面展示
-        response.append(ChatMessage(role="assistant", content="", ))
-        yield response
-        await self._process_event(user_message, None, chat_history, chat_messages_container, response)
+        self.conv.add_user_message(message)
+        response_view = self.conv.page_response
+        yield response_view
 
-        logger.info(f"用户输入为: {self.chat_history + list(chat_history.values())}")
+        logger.info(f"用户输入为: {self.conv.build_payload()}")
 
         # 插入系统提示词
-        if not self.chat_history and self.tool_searcher and os.getenv('ENABLE_TOOL_SEARCH') == 'true':
-            # 构建全部工具的schema,只保留name和desc
-            build_system_prompt = await self.build_tool_search_system_prompt()
-            system_prompt = AutoPMessage(
-                role="system",
-                content=[AutoPContentItem(
-                    type="input_text",
-                    text=build_system_prompt
-                )]
-            )
-            chat_history = {"system": system_prompt, **chat_history}
+        if not self.conv.chat_history and self.tool_searcher and config.enable_tool_search:
+            system_text = await self._build_tool_search_system_prompt()
+            self.conv.add_system_message(system_text)
 
-        # 处理历史记录, history是页面上的历史,暂时未做处理
-        asyncio.create_task(self._process_chat_history(history))
-        logger.info(f"对话历史为: \n{self.chat_history}")
+        logger.info(f"对话历史为: \n{self.conv.chat_history}")
 
         while not chat_stop:
+            pending_executions = []  # [(item_id, call_id, tool_name, tool_args, event)]
+            thinking_text = ""
+            thinking_eid: str | None = None
 
-            final_text = ""
-            call_id = ""
-            tool_name = ""
+            payload = self.conv.build_payload()
 
-            # logger.info(f'------------------------------------------------------')
-            # for i,kkk in enumerate(self.chat_history + list(chat_history.values())):
-            #     logger.info(f'{i+1}-->{kkk.model_dump()}')
-            #     logger.info(f'{i+1}-->{kkk.model_dump(exclude_defaults=True)}')
-            # logger.info(f'------------------------------------------------------')
-
-            payload = [
-                x.model_dump(mode="json")
-                for x in (self.chat_history + list(chat_history.values()))
-            ]
-
-            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            # 动态推理：doubao-seed-1-6-flash 只支持 enabled/disabled
+            # 简单任务（短消息、单步操作）→ disabled 快速响应
+            # 复杂任务（长消息、多步骤、搜索/查找/对比等关键词）→ enabled 深度推理
+            thinking_type = self._decide_thinking(message, len(self.conv.chat_history))
 
             stream = await self.openai.responses.create(
-                model=os.getenv("CHAT_OPEN_MODEL"),
+                model=config.chat_model_for_api,
                 input=payload,
-                temperature=0.95,
+                temperature=config.llm_temperature,
                 stream=True,
-                # stream_options={
-                #     "include_usage": True,
-                #     "chunk_include_usage": True,
-                # },
-                extra_body={
-                    "thinking": {
-                        "type": "disabled"  # 不使用深度思考能力
-                        # "type": "enabled" # 使用深度思考能力
-                    }
-                },
-                tools=tools
+                extra_body={"thinking": {"type": thinking_type}},
+                tools=tools_schema,
             )
 
-            async with aiofiles.open(
-                    f"/Users/macbook0000/PycharmProjects/auto_P/stream_log/{time.strftime('%Y%m%d-%H%M%S')}.log",
-                    mode="w") as f:
-
+            log_path = str(config.stream_log_path / f"{time.strftime('%Y%m%d-%H%M%S')}.log")
+            async with aiofiles.open(log_path, mode="w") as f:
                 async for event in stream:
-                    await f.write(f'{event.type}-{event}\n')
-                    if event.type == "response.output_text.delta":
-                        # 加入历史
-                        chat_history[event.item_id].content[0].text += event.delta
-                        # 页面展示
-                        chat_messages_container[event.item_id].content += event.delta
-                        final_text += event.delta
-                        yield response
+                    await f.write(f"{event.type}-{event}\n")
 
-                    # ---- 工具调用开始（示例）----
+                    if event.type == "response.output_text.delta":
+                        self.conv.current_turn[event.item_id].content[0].text += event.delta
+                        self.conv.page_containers[event.item_id].content += event.delta
+                        yield response_view
+
                     elif event.type == "response.output_item.added":
                         if event.item.type == "message":
-                            # 记录assistant content
-                            auto_p_message = AutoPMessage(
+                            item = AutoPMessage(
                                 role="assistant",
-                                content=[
-                                    AutoPContentItem(
-                                        type="input_text",
-                                        text=""
-                                    )
-                                ]
+                                content=[AutoPContentItem(type="input_text", text="")],
                             )
-                            await self._process_event(auto_p_message, event, chat_history, chat_messages_container,
-                                                      response)
-                            # 添加到聊天记录中
-                            yield response
+                            self.conv.handle_event(item, event)
+                            yield response_view
                         elif event.item.type == "function_call":
-                            auto_p_tool_call = AutoPToolCall(
-                                type="function_call",
-                                arguments="",
-                                name=event.item.name,
-                                call_id=event.item.call_id,
+                            item = AutoPToolCall(
+                                type="function_call", arguments="",
+                                name=event.item.name, call_id=event.item.call_id,
                             )
-                            # 处理消息
-                            await self._process_event(auto_p_tool_call, event, chat_history, chat_messages_container,
-                                                      response)
-                            yield response
-                            call_id = event.item.call_id
-                            tool_name = event.item.name
+                            self.conv.handle_event(item, event)
+                            yield response_view
 
+                    elif event.type == "response.reasoning_summary_text.delta":
+                        # 模型思考过程 — 以可折叠块展示在 chatbot 中
+                        thinking_text += event.delta
+                        if thinking_eid is None:
+                            thinking_eid = f"think_{int(time.time() * 1000)}"
+                            think_html = (
+                                '<details class="thinking-block" open>'
+                                '<summary class="thinking-summary">🧠 思考中...</summary>'
+                                '<div class="thinking-content">'
+                                f'{_sanitize_thinking(thinking_text)}'
+                                '</div></details>'
+                            )
+                            think_msg = ChatMessage(
+                                role="assistant",
+                                content=think_html,
+                                metadata={"title": "思考过程", "id": thinking_eid, "status": "pending"},
+                            )
+                            self.conv.page_containers[thinking_eid] = think_msg
+                            self.conv.page_response.append(think_msg)
+                        else:
+                            container = self.conv.page_containers[thinking_eid]
+                            container.content = (
+                                '<details class="thinking-block" open>'
+                                '<summary class="thinking-summary">🧠 思考中...</summary>'
+                                '<div class="thinking-content">'
+                                f'{_sanitize_thinking(thinking_text)}'
+                                '</div></details>'
+                            )
+                        yield response_view
 
-                    elif event.type == "response.content_part.done":
-                        # content 结束
-                        pass
+                    elif event.type == "response.reasoning_summary_text.done":
+                        if thinking_eid and thinking_eid in self.conv.page_containers:
+                            container = self.conv.page_containers[thinking_eid]
+                            container.content = (
+                                '<details class="thinking-block">'
+                                '<summary class="thinking-summary">🧠 思考完成 ✓</summary>'
+                                '<div class="thinking-content">'
+                                f'{_sanitize_thinking(thinking_text)}'
+                                '</div></details>'
+                            )
+                            container.metadata["status"] = "done"
+                        yield response_view
 
                     elif event.type == "response.output_text.done":
-                        chat_messages_container[event.item_id].metadata["status"] = "done"
+                        self.conv.page_containers[event.item_id].metadata["status"] = "done"
 
                     elif event.type == "response.function_call_arguments.delta":
-                        # 添加到页面上
-                        chat_messages_container[event.item_id].content += f"{event.delta}"
-                        yield response
-                        # 记录添加历史中
-                        chat_history[event.item_id].arguments += event.delta
+                        self.conv.page_containers[event.item_id].content += f"{event.delta}"
+                        yield response_view
+                        self.conv.current_turn[event.item_id].arguments += event.delta
 
-                    # ---- 工具参数完成（示例）----
                     elif event.type == "response.function_call_arguments.done":
-                        # 结束的部分只展示到页面上,chat message不需要添加
-                        chat_messages_container[event.item_id].content += f"\n- 工具参数完成, 开始执行...\n"
-                        yield response
-                        # 检查参数是否正确
+                        self.conv.page_containers[event.item_id].content += "\n- 工具参数完成, 开始执行...\n"
+                        yield response_view
+
                         try:
                             tool_args = json.loads(event.arguments)
                         except Exception as e:
-                            logger.info(f'工具{tool_name}参数解析异常: {e}')
-                            auto_p_tool_call_result = AutoPToolCallResult(
+                            logger.info(f"工具参数解析异常: {e}")
+                            tool_item = self.conv.current_turn.get(event.item_id)
+                            failed_call_id = tool_item.call_id if tool_item else ""
+                            result_item = AutoPToolCallResult(
                                 type="function_call_output",
-                                output=f'工具{tool_name}参数解析异常: {e}, 请检查参数是否正确',
-                                call_id=call_id,
-                                status="failed"
+                                name=tool_item.name if tool_item else "",
+                                output=f"工具参数解析异常: {e}",
+                                call_id=failed_call_id, status="failed",
                             )
-                            await self._process_event(auto_p_tool_call_result, event, chat_history,
-                                                      chat_messages_container, response)
-                            yield response
-                            break
+                            self.conv.handle_event(result_item, event)
+                            yield response_view
+                            continue
 
-                        # 开始执行工具
-                        tool_call = FunctionToolCall(
-                            id=call_id,
-                            function=Function(
-                                name=tool_name,
-                                arguments=json.dumps(tool_args, ensure_ascii=False),
-                            ),
-                            type='function',
-                        )
-                        result = await self.execute_tool(tool_call)
-                        if result.content:
-                            output = result.content[0]
-                            if output.type == 'text':
-                                output = output.text
-                            elif hasattr(output, 'model_dump'):
-                                output = output.model_dump_json()
-                        else:
-                            output = json.dumps(result.structuredContent, ensure_ascii=False)
-                        auto_p_tool_call_result = AutoPToolCallResult(
-                            type="function_call_output",
-                            # name=tool_name,
-                            output=output,
-                            call_id=call_id,
-                            status="completed",
-                        )
-                        await self._process_event(auto_p_tool_call_result, event, chat_history, chat_messages_container,
-                                                  response)
-                        yield response
-                        break
+                        tool_item = self.conv.current_turn.get(event.item_id)
+                        if not tool_item:
+                            logger.error(f"未找到工具调用 item: {event.item_id}")
+                            continue
 
-                    # ---- 最终文本 ----
+                        pending_executions.append((
+                            event.item_id,
+                            tool_item.call_id,
+                            tool_item.name,
+                            tool_args,
+                            event,
+                        ))
+
                     elif event.type == "response.output_item.done":
-                        chat_history[event.item.id].status = "completed"
+                        if event.item.id in self.conv.current_turn:
+                            self.conv.current_turn[event.item.id].status = "completed"
 
-                    # ---- 整个 response 完成 ----
-                    elif event.type == "response.completed":
-                        chat_stop = True
-        self.chat_history.extend(chat_history.values())
-
-    async def _process_event(
-            self,
-            item: AutoPModel,
-            event: ResponseStreamEvent | None,
-            chat_history: dict,
-            chat_messages_container: dict, response: list
-    ) -> None:
-        """负责消息的处理"""
-        if isinstance(item, AutoPMessage):
-            if item.role == "assistant":
-                if not chat_history.get(event.item.id):
-                    # 展示到页面上
-                    assist_msg = ChatMessage(role=item.role, content=item.content[0].text)
-                    chat_messages_container[event.item.id] = assist_msg
-                    response.append(assist_msg)
-                    # 加入到历史记录
-                    chat_history[event.item.id] = item
-            elif item.role == "user":
-                # 加入到历史记录
-                chat_history['user'] = item
-            elif item.role == "system":
-                if not chat_history.get('system'):
-                    # 添加到历史记录
-                    pass
-        elif isinstance(item, AutoPToolCall):
-            if not chat_history.get(event.item.id):
-                chat_message = ChatMessage(
-                    role='assistant',
-                    content=f"- 调用工具: {event.item.name}\n- 工具参数为:",
-                    metadata={
-                        "title": f"开始处理 {event.item.name} 工具",
-                        "id": "tool running",
-                        "status": "pending",
-                    },
+            # ---- 流结束后：批量执行本轮收集的所有工具调用 ----
+            for item_id, call_id, tool_name, tool_args, event in pending_executions:
+                tool_call = FunctionToolCall(
+                    id=call_id,
+                    function=Function(
+                        name=tool_name,
+                        arguments=json.dumps(tool_args, ensure_ascii=False),
+                    ),
+                    type="function",
                 )
-                # 加入到页面展示
-                chat_messages_container[event.item.id] = chat_message
-                response.append(chat_message)
-                # 加入到历史记录
-                chat_history[event.item.id] = item
-                logger.info(f'成功加入到历史中: {chat_history[event.item.id]}')
-        elif isinstance(item, AutoPToolCallResult):
-            # 这里一定能获取到之前添加的 AutoPCallTool,因为它的id和AutoPToolCallResult所用的event.item.id/event.item_id是一样的,所以会覆盖,这里就需要新建一个
-            if chat_history.get(event.item_id):
-                # 渲染到页面
-                chat_message = chat_messages_container[event.item_id]
-                chat_message.content += f'- 工具调用结果:{item.output[:64]}...'
-                # 修改结果
-                chat_messages_container[event.item_id].metadata["status"] = "done"
-                # 加入到历史记录
-                chat_history[event.item_id + "_result"] = item
-            else:
-                logger.error(f"未找到对应的工具调用结果: {event.item_id}")
+
+                exec_result = await self.execute_tool(tool_call)
+                output = self._extract_tool_output(exec_result)
+                result_item = AutoPToolCallResult(
+                    type="function_call_output", name=tool_name,
+                    output=output, call_id=call_id, status="completed",
+                )
+                self.conv.handle_event(result_item, event)
+
+                # 截图工具：将图片注入对话，让模型下一轮能直接进行视觉分析
+                raw_file_id = output.split('\n')[0].strip()
+                if tool_name == 'take_screenshot' and raw_file_id.startswith('file-'):
+                    img_msg = AutoPMessage(
+                        role="user",
+                        content=[
+                            AutoPContentItem(type="input_text",
+                                             text="截图已完成，以下是当前页面的截图，请基于截图内容进行视觉分析："),
+                            AutoPIMGContentItem(type="input_image", file_id=raw_file_id, detail="high"),
+                        ],
+                    )
+                    self.conv.current_turn[f"img_{call_id}"] = img_msg
+                    logger.info(f"已将截图 {raw_file_id} 注入对话历史，供模型视觉分析")
+
+                yield response_view
+
+            # 无工具调用时，任务完成
+            if not pending_executions:
+                chat_stop = True
+
+        self.conv.commit_turn()
+
+    # -- 工具执行 --
 
     async def get_tool_from_session(
-            self,
-            tool_names: set[str],
-            session: ClientSession = None
+            self, tool_names: set[str], session: ClientSession | None = None
     ) -> list[Tool]:
-        """获取指定session中的指定Tool"""
         need_tools = []
         if session:
             all_tools = await session.list_tools()
@@ -421,113 +315,131 @@ class AutoProcessAgent:
                 if tool.name in tool_names:
                     need_tools.append(tool)
         else:
-            for tool in self.tools:
+            for tool in self.mcp.all_tools:
                 if tool.name in tool_names:
                     need_tools.append(tool)
                     tool_names -= {tool.name}
         return need_tools
 
-    async def execute_tool(
-            self,
-            tool_call: ToolCall
-    ) -> CallToolResult:
-        """
-        实际执行tool的方法
-        :return: 方法执行的结果
-        """
+    async def execute_tool(self, tool_call: ToolCall) -> CallToolResult:
         tool_name = tool_call.function.name
         tool_args = json.loads(tool_call.function.arguments)
-        server_name = self.tool_service_map.get(tool_name, '')
-        server: ClientSession = self.servers.get(server_name, None)
+        server_name = self.mcp.get_server_name_for_tool(tool_name)
+        server = self.mcp.get_session(server_name)
         if not server:
-            return await auto_p_tools.build_tool_result(f'未找到{tool_name}工具对应的MCP服务', tool_call)
+            return await auto_p_tools.build_tool_result(
+                f"未找到{tool_name}工具对应的MCP服务", tool_call
+            )
         logger.info(f"正在执行 {server_name} 服务的 {tool_name} 工具, 参数为: {tool_args}")
+
         special_method: Callable = auto_p_tools.special_methods.get(tool_name)
         if special_method:
-            logger.info(f'正在执行特殊方法 {tool_name}')
+            logger.info(f"正在执行特殊方法 {tool_name}")
             return await special_method(self, tool_call)
-        elif server_name == 'chrome-devtools':
+
+        if server_name == CHROME_DEVTOOLS_SERVICE:
             if not self.chrome_tools:
                 self.chrome_tools = ChromeTools(server)
             return await self.chrome_tools.invoke_tool(tool_call)
+
         try:
             return await server.call_tool(tool_name, tool_args)
+        except TimeoutError:
+            logger.error(f"工具 {tool_name} 执行超时")
+            return await auto_p_tools.build_tool_result(
+                f"工具 {tool_name} 执行超时，请尝试简化操作或重试", tool_call
+            )
         except Exception as e:
-            return await auto_p_tools.build_tool_result(f'调用{tool_name}工具异常,请分析异常后再进行下一步: {e}',
-                                                        tool_call)
+            logger.error(f"工具 {tool_name} 执行异常: {type(e).__name__}: {e}")
+            return await auto_p_tools.build_tool_result(
+                f"调用 {tool_name} 工具异常: {e}", tool_call
+            )
 
-    async def build_tool_search_system_prompt(
-            self
-    ) -> str:
-        """
-        构建开启工具搜索后的系统提示词
-        :return: 工具
-        """
+    # -- 工具 Schema 构建 --
+
+    async def _build_tool_search_system_prompt(self) -> str:
         lightweight_tools = []
-        # server为ClientSession对象
-        for server_name, server in self.servers.items():
-            if server_name == os.getenv('OFFICIAL_SERVICE_NAMES'):
+        official_name = config.official_service_names
+        for server_name, session in self.mcp.servers.items():
+            if server_name == official_name:
                 continue
-            list_tools_result = await server.list_tools()
-            for tool in list_tools_result.tools:
-                lightweight_tool = {
-                    "name": tool.name,
-                    "description": tool.description
-                }
-                lightweight_tools.append(lightweight_tool)
-        logger.info(f"轻量化可用工具(已启用工具搜索模式): {len(lightweight_tools)}")
-        # 构建工具描述
-        mcp_tool_descriptions = [f'- {mcp_service.description}' for mcp_service in self.servers_McpService.values()]
-        res = self.prompts_manager.build_prompt(
-            auto_p_prompts.system_prompts_lightweight_V3,
-            mcp_tool_descriptions='\n'.join(mcp_tool_descriptions),
-            lightweight_tools=json.dumps(lightweight_tools)
-        )
-        return res
+            result = await session.list_tools()
+            for tool in result.tools:
+                lightweight_tools.append({"name": tool.name, "description": tool.description})
 
-    async def build_tools_schema(
-            self,
-            tool_name: str = None
-    ) -> Iterable:
-        # 当指定要调用的工具时,只返回该工具的schema
+        logger.info(f"轻量化可用工具(已启用工具搜索模式): {len(lightweight_tools)}")
+        descriptions = [
+            f"- {cfg.description}" for cfg in self.mcp.service_configs.values()
+        ]
+        return fill_prompt(
+            auto_p_prompts.system_prompts_lightweight_V3,
+            mcp_tool_descriptions="\n".join(descriptions),
+            lightweight_tools=json.dumps(lightweight_tools),
+        )
+
+    async def _build_tools_schema(self, tool_name: str | None = None) -> list[dict]:
         if tool_name:
-            server = self.servers.get(tool_name, None)
+            server = self.mcp.servers.get(tool_name)
             if server is None:
                 return []
-            list_tools_result = await server.list_tools()
-            return [response_convert_tool(tool) for tool in list_tools_result.tools if tool.name == tool_name]
+            result = await server.list_tools()
+            return [convert_tool(t) for t in result.tools if t.name == tool_name]
 
-        # 如果开启了工具搜索只返回官方工具
-        if self.tool_searcher and os.getenv("ENABLE_TOOL_SEARCH", "false") == "true":
-            list_tools_result = await self.servers.get(os.getenv('OFFICIAL_SERVICE_NAMES')).list_tools()
-            tools = list_tools_result.tools
-            logger.info(f"可用工具(已启用工具搜索模式): {len(tools)}")
-            return [response_convert_tool(tool) for tool in tools]
-        else:
-            # server为ClientSession对象
-            logger.info(f"可用工具(未启用工具搜索模式): {len(self.tools)}")
-            return [response_convert_tool(tool) for tool in self.tools]
+        if self.tool_searcher and config.enable_tool_search:
+            official_name = config.official_service_names
+            session = self.mcp.servers.get(official_name)
+            if session:
+                result = await session.list_tools()
+                logger.info(f"可用工具(已启用工具搜索模式): {len(result.tools)}")
+                return [convert_tool(t) for t in result.tools]
+            return []
 
-    def clear_chat_history(
-            self,
-            history: List[Union[Dict[str, Any], ChatMessage]]
-    ) -> List[Union[Dict[str, Any], ChatMessage]]:
-        """清空历史记录"""
-        self.chat_history = []
-        logger.info(f'已清空历史记录:{len(history)}')
+        logger.info(f"可用工具(未启用工具搜索模式): {len(self.mcp.all_tools)}")
+        return [convert_tool(t) for t in self.mcp.all_tools]
+
+    @staticmethod
+    def _decide_thinking(message: str, history_len: int) -> str:
+        """根据任务复杂度动态决定是否启用推理。
+
+        doubao-seed-1-6-flash 只支持 enabled / disabled（不支持 auto）。
+        规则：
+          - 第一个工具调用后的后续轮次 → disabled（执行阶段，不需要再思考）
+          - 用户消息很短（≤8字）且不含多步关键词 → disabled
+          - 否则 → enabled
+        """
+        # 后续 ReAct 轮次：工具已执行完，模型只需看结果决定下一步，不需要深度推理
+        if history_len > 0:
+            return "disabled"
+
+        # 首轮：根据用户消息复杂度判断
+        complex_keywords = {"然后", "并且", "之后", "接着", "搜索", "搜", "查找",
+                            "对比", "比较", "分析", "总结", "提取", "告诉我",
+                            "检查", "确认", "验证", "填写", "登录", "注册",
+                            "并", "再", "又", "第一"}
+        if len(message) <= 8 and not any(kw in message for kw in complex_keywords):
+            return "disabled"
+        return "enabled"
+
+    # -- 工具方法 --
+
+    def clear_chat_history(self, history: List[Any]) -> list:
+        self.conv.clear()
+        logger.info(f"已清空历史记录")
         return []
 
-    async def _process_chat_history(
-            self,
-            history: List[Union[Dict[str, Any], ChatMessage]]
-    ) -> None:
-        """
-        处理历史记录
-        1.将其中的tool_call_result中超长的文本进行缩减
-        :param history: 历史记录
-        :return: chat_history
-        """
-        for item in self.chat_history[:len(self.chat_history) - 5]:
-            if isinstance(item, AutoPToolCallResult) and item.name == 'take_snapshot':
-                # 如果是take_snapshot那就缩减一下超长文本
-                item.output = item.output[:512] + "..."
+    @staticmethod
+    def _extract_tool_output(result: CallToolResult) -> str:
+        if result.content:
+            content = result.content[0]
+            if content.type == "text":
+                return content.text
+            if hasattr(content, "model_dump"):
+                return content.model_dump_json()
+        return json.dumps(result.structuredContent or {}, ensure_ascii=False)
+
+
+def _sanitize_thinking(text: str) -> str:
+    """对思考内容做 HTML 转义和换行处理，防 XSS 并保留可读性。"""
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    text = text.replace("\n\n", "</p><p>").replace("\n", "<br>")
+    return f"<p>{text}</p>"

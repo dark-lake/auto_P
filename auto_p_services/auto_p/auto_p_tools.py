@@ -1,8 +1,5 @@
-import asyncio
 import json
 import os
-import platform
-import subprocess
 
 from mcp.server.fastmcp.tools import Tool
 from mcp.types import CallToolResult
@@ -42,94 +39,28 @@ async def do_get_tool_schema(agent: 'AutoProcessAgent', tool_call: ToolCall) -> 
         result = f'未找到工具:{need_tool_names}'
     else:
         logger.info(f'模型成功获取到工具:{need_tool_names}的json schema')
-        result = [convert_tool(tool) for tool in need_tools]
+        result = [convert_tool(tool, fmt="chat") for tool in need_tools]
     return await build_tool_result(result, tool_call)
 
 
 async def do_wait_for_user_input(agent: 'AutoProcessAgent', tool_call: ToolCall) -> CallToolResult:
-    """
-    等待用户输入
+    """向用户提问并结束当前轮对话。
+
+    不再阻塞等待——直接返回 pause_reason 作为工具结果，
+    模型收到后会输出文本回复给用户，本轮对话自然结束。
+    用户下次输入时开启新一轮对话。
+
     :param tool_call: 模型返回的工具调用对象
-    :param agent: auto_p_agent对象, 字典格式
-    :return: 用户输入
+    :param agent: AutoProcessAgent 实例
+    :return: pause_reason 作为工具结果
     """
-    # 参数
     tool_args = json.loads(tool_call.function.arguments)
-    # 暂停原因
-    pause_reason = tool_args.get('pause_reason', None)
-    print("模型要求暂停 → 等待你的操作")
-    print(f"暂停原因:{pause_reason}")
-
-    # 根据操作系统类型选择合适的GUI方法
-    def get_input_with_gui() -> str:
-        system = platform.system()
-
-        # macOS系统使用AppleScript
-        if system == "Darwin":  # macOS的platform.system()返回"Darwin"
-            try:
-                # 构造AppleScript命令
-                script = f'''
-                display dialog "暂停原因: {pause_reason}
-请输入你的操作指令:" default answer "" with title "用户输入" with icon note
-                '''
-                # 执行AppleScript
-                result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, check=True)
-                # 解析结果，AppleScript返回格式为：button returned:OK, text returned:用户输入的内容
-                output = result.stdout.strip()
-                if 'text returned:' in output:
-                    # 提取用户输入的内容
-                    user_input = output.split('text returned:')[-1]
-                    return user_input
-                return ""
-            except subprocess.CalledProcessError as e:
-                # AppleScript执行失败，回退到控制台输入
-                print(f"AppleScript对话框失败 ({str(e)})，回退到控制台输入")
-                return input(f"暂停原因: {pause_reason}\n请输入你的操作指令:")
-            except Exception as e:
-                # 其他异常，也回退到控制台输入
-                print(f"GUI输入失败 ({str(e)})，回退到控制台输入")
-                return input(f"暂停原因: {pause_reason}\n请输入你的操作指令:")
-
-        # Windows系统使用PowerShell
-        elif system == "Windows":
-            try:
-                # 使用PowerShell创建输入框
-                command = (
-                    "Add-Type -AssemblyName Microsoft.VisualBasic; "
-                    f"$title = \"用户输入\"; "
-                    f"$message = \"暂停原因: {pause_reason}\n请输入你的操作指令:\"; "
-                    "$result = [Microsoft.VisualBasic.Interaction]::InputBox($message, $title, \"\"); "
-                    "Write-Output $result"
-                )
-
-                # 执行PowerShell命令
-                result = subprocess.run([
-                    'powershell', '-Command', command
-                ], capture_output=True, text=True, check=True)
-
-                user_input = result.stdout.strip()
-                return user_input
-            except subprocess.CalledProcessError as e:
-                # PowerShell执行失败，回退到控制台输入
-                print(f"PowerShell对话框失败 ({str(e)})，回退到控制台输入")
-                return input(f"暂停原因: {pause_reason}\n请输入你的操作指令:")
-            except Exception as e:
-                # 其他异常，也回退到控制台输入
-                print(f"GUI输入失败 ({str(e)})，回退到控制台输入")
-                return input(f"暂停原因: {pause_reason}\n请输入你的操作指令:")
-
-        # 其他系统或未识别系统，直接使用控制台输入
-        else:
-            return input(f"暂停原因: {pause_reason}\n请输入你的操作指令:")
-
-    loop = asyncio.get_event_loop()
-    try:
-        user_input = await loop.run_in_executor(None, get_input_with_gui)
-    except Exception:
-        # 最后的回退方案
-        user_input = await loop.run_in_executor(None, input, f"暂停原因: {pause_reason}\n请输入你的操作指令:")
-
-    return await build_tool_result(user_input, tool_call)
+    pause_reason = tool_args.get('pause_reason', '未知原因')
+    logger.info(f"Agent 向用户提问: {pause_reason}")
+    return await build_tool_result(
+        f"已向用户提问: {pause_reason}。请直接用文字回复用户的问题，然后结束本轮对话。",
+        tool_call,
+    )
 
 
 async def do_tool_search(agent: 'AutoProcessAgent', tool_call: ToolCall) -> CallToolResult:
@@ -159,10 +90,9 @@ async def do_tool_search(agent: 'AutoProcessAgent', tool_call: ToolCall) -> Call
     # 小于等于3个匹配到的工具对象
     tools = await agent.tool_searcher.search(
         query=tool_description,
-        k=int(os.getenv('TOOL_SEARCH_K', 3))
     )
     logger.info(f'搜索到如下工具: {[t.name for t in tools]}')
-    tool_json_schema: list[dict] = [convert_tool(tool) for tool in tools]
+    tool_json_schema: list[dict] = [convert_tool(tool, fmt="chat") for tool in tools]
     if not tool_json_schema:
         return await build_tool_result(f'未搜索到任何工具,请检查工具描述是否正确,tool_description={tool_description}',
                                        tool_call)

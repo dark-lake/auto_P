@@ -21,18 +21,18 @@ class AutoPMessage(BaseModel):
     """消息模型"""
     type: str = Field(default="message", description="消息类型")
     role: str = Field(default="", description="角色")
-    content: List[AutoPContentItem, AutoPIMGContentItem] = Field(default_factory=list, description="消息内容列表")
+    content: List[Union[AutoPContentItem, AutoPIMGContentItem]] = Field(default_factory=list,
+                                                                        description="消息内容列表")
     status: str = Field(default="in_progress", description="项目状态")
 
     @model_validator(mode='after')
     def set_type_based_on_role(self) -> Self:
-        if self.role in ["user", "system"]:
-            self.content[0].type = "input_text"
-        elif self.role == "assistant":
-            self.content[0].type = "output_text"
-        else:
-            # function
-            pass
+        for item in self.content:
+            if isinstance(item, AutoPContentItem):
+                if self.role in ("user", "system"):
+                    item.type = "input_text"
+                elif self.role == "assistant":
+                    item.type = "output_text"
         return self
 
 
@@ -48,7 +48,7 @@ class AutoPToolCall(BaseModel):
 class AutoPToolCallResult(BaseModel):
     """工具调用结果模型"""
     type: str = Field(default="function_call_output", description="结果类型")
-    # name: str = Field(default="", description="工具名称")
+    name: str = Field(default="", description="工具名称")
     output: Any = Field(default="", description="工具输出")
     call_id: str = Field(default="", description="调用ID")
     status: str = Field(default="completed", description="状态")

@@ -8,35 +8,32 @@ from dotenv import load_dotenv
 from mcp import Tool
 
 import auto_p_vector.embedding_service.HuoShan_embedding as HuoShan_embedding
+from auto_p_utils.config import config
 from auto_p_utils.logger_util import logger
 
 load_dotenv()
 
 
 class ToolSearcher:
-    def __init__(self, tools: list[Tool], persist_path="./tool_search_db"):
-        """
-        tools: List[Tool]
-            Tool 必须包含 name/description/params 或等价字段
-        persist_path: str
-            Chroma 本地向量库持久化路径
-        """
+    def __init__(self, tools: list[Tool], persist_path: str | None = None):
+        """初始化 ToolSearcher。
 
+        Args:
+            tools: 工具对象列表，每个 Tool 必须包含 name/description/inputSchema
+            persist_path: Chroma 本地向量库持久化路径，默认使用 config.persist_path
+        """
         self.tools: list[Tool] = tools
-        self.persist_path = os.getenv("PERSIST_PATH") if os.getenv("PERSIST_PATH") else persist_path
+        self.persist_path = str(persist_path or config.persist_path)
 
-        # 确保持久化路径存在
         if not os.path.exists(self.persist_path):
             os.makedirs(self.persist_path)
             logger.info(f"创建持久化目录: {self.persist_path}")
 
-        # 创建/加载本地 Chroma 实例(持久化)
         self.chroma_client = chromadb.PersistentClient(path=self.persist_path)
 
-        # 创建或加载集合
         self.collection = self.chroma_client.get_or_create_collection(
-            name="mcp_tools",
-            metadata={"hnsw:space": "cosine"},  # 余弦相似度
+            name=config.collection_name,
+            metadata={"hnsw:space": "cosine"},
         )
 
     # 同步工具:检测新增、修改、删除
@@ -143,7 +140,7 @@ class ToolSearcher:
         if not text:
             raise ValueError("向量化的文本不能为空")
         vec = await self.do_embed(text)
-        logger.info(f'使用{os.getenv("EMBEDDING_OPEN_MODEL")}模型向量化文本:{text},结果为: {len(vec)}')
+        logger.info(f'使用{config.embedding_model_for_api}模型向量化文本, 向量维度: {len(vec)}')
         return vec
 
     async def do_embed(self, text: str) -> List[float]:
@@ -155,9 +152,9 @@ class ToolSearcher:
         return await HuoShan_embedding.embedding(text)
 
     # 搜索工具
-    async def search(self, query: str, k: int = 3) -> list[Tool]:
-        # 同步调用 embed,使用 asyncio.run
+    async def search(self, query: str, k: int | None = None) -> list[Tool]:
         q_vec = await self.embed(query)
+        k = k or config.tool_search_k
 
         results = self.collection.query(
             query_embeddings=[q_vec],

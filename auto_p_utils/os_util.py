@@ -76,87 +76,51 @@ async def get_config(file_path: str) -> dict:
         return json.loads(config)
 
 
-def convert_tool(tool: Tool) -> Dict[str, Any]:
+def convert_tool(tool: Tool, fmt: str = "responses") -> Dict[str, Any]:
+    """将 MCP Tool 转换为 OpenAI function schema。
+
+    Args:
+        tool: MCP 工具对象
+        fmt: 输出格式
+            - "responses": 用于 OpenAI Responses API (平铺格式)
+            - "chat": 用于 chat.completions API (嵌套格式)
+
+    Returns:
+        转换后的 function schema 字典
     """
-    将 MCP 工具（Python 或 JS）转换为统一的字典格式
-    """
-    # 工具名称和描述
-    name = getattr(tool, 'name', '')
-    description = getattr(tool, 'description', '')
+    name = getattr(tool, "name", "")
+    description = getattr(tool, "description", "")
+    input_schema = getattr(tool, "inputSchema", {}) or {}
 
-    # 尝试获取 inputSchema，兜底空字典
-    input_schema = getattr(tool, 'inputSchema', {}) or {}
-
-    # type，默认 'object'
-    schema_type = input_schema.get('type', 'object')
-
-    # properties
+    schema_type = input_schema.get("type", "object")
     properties = {}
-    for k, v in input_schema.get('properties', {}).items():
-        # v 可能是 None 或不完整
-        v_type = v.get('type', 'string') if isinstance(v, dict) else 'string'
-        v_desc = v.get('title', '') if isinstance(v, dict) else ''
-        properties[k] = {
-            "type": v_type,
-            "description": v_desc
-        }
+    for k, v in input_schema.get("properties", {}).items():
+        v_type = v.get("type", "string") if isinstance(v, dict) else "string"
+        v_desc = v.get("title", "") if isinstance(v, dict) else ""
+        properties[k] = {"type": v_type, "description": v_desc}
+    required = input_schema.get("required", [])
 
-    # required 字段，默认空列表
-    required = input_schema.get('required', [])
-
-    # 构建最终字典
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": {
-                "type": schema_type,
-                "properties": properties,
-                "required": required
-            }
-        }
+    params = {
+        "type": schema_type,
+        "properties": properties,
+        "required": required,
     }
 
-
-def response_convert_tool(tool: Tool) -> Dict[str, Any]:
-    """
-    将 MCP 工具（Python 或 JS）转换为统一的字典格式
-    """
-    # 工具名称和描述
-    name = getattr(tool, 'name', '')
-    description = getattr(tool, 'description', '')
-
-    # 尝试获取 inputSchema，兜底空字典
-    input_schema = getattr(tool, 'inputSchema', {}) or {}
-
-    # type，默认 'object'
-    schema_type = input_schema.get('type', 'object')
-
-    # properties
-    properties = {}
-    for k, v in input_schema.get('properties', {}).items():
-        # v 可能是 None 或不完整
-        v_type = v.get('type', 'string') if isinstance(v, dict) else 'string'
-        v_desc = v.get('title', '') if isinstance(v, dict) else ''
-        properties[k] = {
-            "type": v_type,
-            "description": v_desc
+    if fmt == "chat":
+        return {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": description,
+                "parameters": params,
+            },
         }
-
-    # required 字段，默认空列表
-    required = input_schema.get('required', [])
-
-    # 构建最终字典
+    # 默认 Responses API 平铺格式
     return {
         "type": "function",
         "name": name,
         "description": description,
-        "parameters": {
-            "type": schema_type,
-            "properties": properties,
-            "required": required
-        }
+        "parameters": params,
     }
 
 
