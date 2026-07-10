@@ -33,6 +33,12 @@ load_dotenv()
 
 CHROME_DEVTOOLS_SERVICE = "chrome-devtools"
 
+# 工具执行后需要高亮目标元素的工具（操作后 document.activeElement 即为目标元素）
+_HIGHLIGHT_TRIGGER_TOOLS = frozenset({
+    'click', 'fill', 'fill_form', 'hover', 'press_key',
+    'type_text', 'select_option', 'drag', 'upload_file',
+})
+
 
 class AutoProcessAgent:
     """基于 LLM 的浏览器自动化 Agent。
@@ -400,7 +406,12 @@ class AutoProcessAgent:
         if server_name == CHROME_DEVTOOLS_SERVICE:
             if not self.chrome_tools:
                 self.chrome_tools = ChromeTools(server)
-            return await self.chrome_tools.invoke_tool(tool_call)
+            result = await self.chrome_tools.invoke_tool(tool_call)
+            # 操作后高亮 document.activeElement（每次操作都注入完整脚本，DOM ID 保证 CSS 幂等）
+            if tool_name in _HIGHLIGHT_TRIGGER_TOOLS:
+                logger.info(f"准备高亮: 工具={tool_name}, 参数={tool_args}")
+                await self.chrome_tools.flash_operated_element()
+            return result
 
         try:
             return await server.call_tool(tool_name, tool_args)

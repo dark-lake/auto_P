@@ -25,6 +25,69 @@ class ChromeTools:
         self.server = server  # mcp 服务
         self.page_tools = None  # 页面工具
 
+    async def flash_operated_element(self) -> bool:
+        """高亮当前 document.activeElement（注入 CSS + 高亮，一条脚本完成）。
+
+        每次 click/fill 等操作后直接调用即可，无需预先注入。
+        CSS 注入部分有 DOM ID 检测保证幂等（只注入一次）。
+        """
+        flash_js = """() => {
+  // ── CSS 注入（幂等：DOM ID 检测）──
+  if (!document.getElementById('auto-p-highlight-style')) {
+    const style = document.createElement('style');
+    style.id = 'auto-p-highlight-style';
+    style.textContent = `
+      @keyframes auto-p-glow {
+        0%   { outline-color: #3b82f6; box-shadow: 0 0 0 0 rgba(59,130,246,0.4); }
+        50%  { outline-color: rgba(59,130,246,0.3); box-shadow: 0 0 8px 4px rgba(59,130,246,0.15); }
+        100% { outline-color: #3b82f6; box-shadow: 0 0 0 0 rgba(59,130,246,0.4); }
+      }
+      .auto-p-highlight {
+        outline: 3px solid #3b82f6 !important;
+        outline-offset: 2px !important;
+        animation: auto-p-glow 0.8s ease-in-out 3 !important;
+        border-radius: 3px !important;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // ── 清除所有已有高亮 ──
+  var prev = document.querySelectorAll('.auto-p-highlight');
+  for (var i = 0; i < prev.length; i++) {
+    var p = prev[i];
+    p.classList.remove('auto-p-highlight');
+    if (p.__auto_p_hl_timer) { clearTimeout(p.__auto_p_hl_timer); p.__auto_p_hl_timer = null; }
+  }
+
+  // ── 获取焦点元素 ──
+  var el = document.activeElement;
+  if (!el || el === document.body || !el.classList) return 'no-element';
+
+  // ── 强制 reflow + 高亮 ──
+  void el.offsetWidth;
+  el.classList.add('auto-p-highlight');
+  el.__auto_p_hl_timer = setTimeout(function() {
+    el.classList.remove('auto-p-highlight');
+    el.__auto_p_hl_timer = null;
+  }, 2000);
+
+  return 'highlighted';
+}"""
+        try:
+            result = await self.server.call_tool("evaluate_script", {"function": flash_js})
+            # 记录 evaluate_script 返回值，用于调试
+            if result and result.content:
+                for c in result.content:
+                    txt = getattr(c, 'text', str(c))
+                    logger.info(f"高亮 evaluate_script 返回: {txt[:200]}")
+            else:
+                logger.warning("高亮 evaluate_script 返回空结果")
+            return True
+        except Exception as e:
+            logger.warning(f"高亮元素失败: {type(e).__name__}: {e}")
+            return False
+
     async def invoke_tool(
             self,
             tool_call: ToolCall
