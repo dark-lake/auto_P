@@ -38,14 +38,14 @@ class ChromeTools:
     style.id = 'auto-p-highlight-style';
     style.textContent = `
       @keyframes auto-p-glow {
-        0%   { outline-color: #3b82f6; box-shadow: 0 0 0 0 rgba(59,130,246,0.4); }
-        50%  { outline-color: rgba(59,130,246,0.3); box-shadow: 0 0 8px 4px rgba(59,130,246,0.15); }
-        100% { outline-color: #3b82f6; box-shadow: 0 0 0 0 rgba(59,130,246,0.4); }
+        0%   { outline-color: #ef4444; box-shadow: 0 0 16px 8px rgba(239,68,68,0.6); }
+        50%  { outline-color: #1a0000; box-shadow: 0 0 2px 1px rgba(239,68,68,0.05); }
+        100% { outline-color: #ef4444; box-shadow: 0 0 16px 8px rgba(239,68,68,0.6); }
       }
       .auto-p-highlight {
-        outline: 3px solid #3b82f6 !important;
+        outline: 4px solid #ef4444 !important;
         outline-offset: 2px !important;
-        animation: auto-p-glow 0.8s ease-in-out 3 !important;
+        animation: auto-p-glow 0.6s ease-in-out 3 !important;
         border-radius: 3px !important;
       }
     `;
