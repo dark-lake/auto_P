@@ -54,7 +54,15 @@ class AutoPToolCallResult(BaseModel):
     status: str = Field(default="completed", description="状态")
 
 
-AutoPModel = Union[AutoPMessage, AutoPToolCall, AutoPToolCallResult, AutoPContentItem, AutoPIMGContentItem]
+class AutoPThinking(BaseModel):
+    """思考过程模型 — 用于持久化 LLM 的推理摘要，不发送给 LLM。"""
+    type: str = Field(default="thinking", description="类型")
+    content: str = Field(default="", description="思考内容")
+    status: str = Field(default="completed", description="状态")
+
+
+AutoPModel = Union[
+    AutoPMessage, AutoPToolCall, AutoPToolCallResult, AutoPThinking, AutoPContentItem, AutoPIMGContentItem]
 
 if __name__ == '__main__':
     system_prompt = {

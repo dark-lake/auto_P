@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 
 from mcp.server.fastmcp.tools import Tool
 from mcp.types import CallToolResult
@@ -99,11 +100,24 @@ async def do_tool_search(agent: 'AutoProcessAgent', tool_call: ToolCall) -> Call
     return await build_tool_result(tool_json_schema, tool_call)
 
 
+async def do_get_time_now(agent: 'AutoProcessAgent', tool_call: ToolCall) -> CallToolResult:
+    """
+    获取当前系统时间
+    :param tool_call: 模型返回的工具调用对象
+    :param agent: auto_p_agent对象, 字典格式
+    :return: 当前系统时间
+    """
+    now = datetime.now()
+    time_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    # 2026-07-10 23:15:42
+    return await build_tool_result(f'当前系统时间为:{time_str}', tool_call)
+
 # 方法,方法名,描述
 special_methods = {
     "get_tool_schema": do_get_tool_schema,
     "wait_for_user_input": do_wait_for_user_input,
     "tool_search": do_tool_search,
+    "get_time_now": do_get_time_now,
 }
 
 if __name__ == "__main__":

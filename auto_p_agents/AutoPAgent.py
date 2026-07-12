@@ -8,7 +8,11 @@ from dotenv import load_dotenv
 from gradio.components.chatbot import ChatMessage
 from mcp import ClientSession, Tool
 from mcp.types import CallToolResult
-from openai import AsyncOpenAI
+from openai import (
+    AsyncOpenAI,
+    APIError, APIStatusError, PermissionDeniedError,
+    RateLimitError, APITimeoutError, APIConnectionError,
+)
 from openai.types.beta.threads.runs import ToolCall
 from openai.types.beta.threads.runs.function_tool_call import Function, FunctionToolCall
 
@@ -16,7 +20,7 @@ from auto_p_agents.conversation_manager import ConversationManager
 from auto_p_agents.mcp_connector import MCPConnector
 from auto_p_gui.message_items.message_models import (
     AutoPMessage, AutoPContentItem, AutoPIMGContentItem,
-    AutoPToolCall, AutoPToolCallResult,
+    AutoPToolCall, AutoPToolCallResult, AutoPThinking,
 )
 from auto_p_prompts.prompts import auto_p_prompts as auto_p_prompts
 from auto_p_prompts.prompts_manager import fill_prompt
@@ -24,6 +28,9 @@ from auto_p_services.McpServiceManager import McpServiceManager
 from auto_p_services.auto_p import auto_p_tools
 from auto_p_services.chrome_mcp.chrome_tools import ChromeTools
 from auto_p_services.mcp_services_config import mcp_service_manager
+from auto_p_services.session_repository import (
+    SessionRepository, get_session_repository, close_conn,
+)
 from auto_p_utils.config import config
 from auto_p_utils.logger_util import logger
 from auto_p_utils.os_util import convert_tool
@@ -40,25 +47,58 @@ _HIGHLIGHT_TRIGGER_TOOLS = frozenset({
 })
 
 
+def _format_api_error(e: Exception) -> str:
+    """将 API 异常格式化为用户友好的错误提示文本。"""
+    if isinstance(e, PermissionDeniedError):
+        body = e.body if isinstance(e.body, dict) else {}
+        err_info = body.get("error", body) if isinstance(body, dict) else {}
+        err_code = err_info.get("code", "") if isinstance(err_info, dict) else ""
+        err_msg = err_info.get("message", "") if isinstance(err_info, dict) else str(e)
+        if err_code == "AccountOverdueError" or "overdue" in str(e).lower():
+            return "⚠️ **账户余额不足**\n\nAPI 账户已欠费，请充值后重试。"
+        return f"⚠️ **API 访问被拒绝** (403)\n\n{err_msg}"
+
+    if isinstance(e, RateLimitError):
+        return "⚠️ **请求频率过高** (429)\n\n请稍后重试。"
+
+    if isinstance(e, APITimeoutError):
+        return "⚠️ **请求超时**\n\nAPI 响应超时，请稍后重试。"
+
+    if isinstance(e, APIConnectionError):
+        return "⚠️ **网络连接异常**\n\n无法连接到 API 服务器，请检查网络后重试。"
+
+    if isinstance(e, APIStatusError):
+        return f"⚠️ **API 调用失败** ({e.status_code})\n\n{getattr(e, 'message', str(e))}"
+
+    if isinstance(e, APIError):
+        return f"⚠️ **API 错误**\n\n{str(e)}"
+
+    return f"⚠️ **处理请求时发生异常**\n\n{type(e).__name__}: {e}"
+
+
 class AutoProcessAgent:
     """基于 LLM 的浏览器自动化 Agent。
 
     委托 MCPConnector 管理 MCP 连接，ConversationManager 管理对话历史，
     自身负责 LLM 调用、工具路由和 ReAct 循环。
+
+    支持会话持久化：设置 session_id 后自动将对话历史保存到 MySQL。
     """
 
-    def __init__(self):
+    def __init__(self, repo: SessionRepository | None = None):
         self.openai = AsyncOpenAI(
             api_key=config.chat_api_key,
             base_url=config.chat_base_url,
             timeout=config.chat_timeout,
         )
         self.mcp = MCPConnector()
-        self.conv = ConversationManager()
+        self.conv = ConversationManager(repo=repo)
         self.chrome_tools: ChromeTools | None = None
         self.tool_searcher: ToolSearcher | None = None
         self._processing: bool = False  # 防重入
         self._cancel_event = asyncio.Event()  # 中断信号
+        self._active_session_id: str | None = None  # 当前 generator 绑定的会话
+        self._repo: SessionRepository | None = repo or get_session_repository()
 
     # -- 连接管理 (代理到 MCPConnector) --
 
@@ -84,6 +124,55 @@ class AutoProcessAgent:
             f"MCP 服务连接成功, {', '.join(s.name for s in services)}, "
             f"共{len(services)}个服务."
         )
+
+    # -- 会话管理 --
+
+    async def create_session(self, title: str = "新会话") -> str:
+        """创建新会话并切换过去。"""
+        # 保存旧会话进行中状态
+        if self.conv.session_id:
+            self.conv.save_in_progress()
+            if self._processing:
+                self.cancel_execution()
+        sid = self._repo.create_session(title)
+        self.conv.clear()
+        self.conv.session_id = sid
+        logger.info(f"切换到新会话: {sid}")
+        return sid
+
+    async def switch_session(self, session_id: str) -> int:
+        """切换到已有会话，返回加载的消息数。
+
+        切换前会：1) 保存当前会话进行中状态到 DB  2) 取消正在执行的 generator
+        """
+        # 保存旧会话的进行中消息（包括未提交的 current_turn）
+        old_sid = self.conv.session_id
+        if old_sid and old_sid != session_id:
+            self.conv.save_in_progress()
+            # 如果有正在执行的 generator，取消它
+            if self._processing:
+                self.cancel_execution()
+
+        count = self.conv.load_session(session_id)
+        return count
+
+    async def delete_session(self, session_id: str) -> bool:
+        """删除指定会话。如果当前会话被删，切到最新会话。"""
+        if self._processing and self.conv.session_id == session_id:
+            self.cancel_execution()
+        deleted = self._repo.delete_session(session_id)
+        if deleted and self.conv.session_id == session_id:
+            self.conv.clear()
+            self.conv.session_id = None
+        return deleted
+
+    async def list_sessions(self) -> list[dict]:
+        """列出所有会话。"""
+        return self._repo.list_sessions()
+
+    async def cleanup(self):
+        """关闭数据库连接。"""
+        close_conn()
 
     # -- 中断控制 --
 
@@ -121,18 +210,47 @@ class AutoProcessAgent:
 
         self._processing = True
         self._cancel_event.clear()
+        self._active_session_id = self.conv.session_id  # 绑定当前会话
         try:
             async for msg in self._process_query(message, history):
-                yield history + msg, ""
+                # 只有当前会话没被切换时才 yield（防止旧 generator 污染新会话）
+                if self._active_session_id == self.conv.session_id:
+                    yield history + msg, ""
+        except Exception as e:
+            logger.error(f"处理消息时发生异常: {type(e).__name__}: {e}")
+            error_text = _format_api_error(e)
+            error_msg = ChatMessage(
+                role="assistant",
+                content=error_text,
+            )
+            self.conv.page_response.append(error_msg)
+            # 持久化错误消息到 current_turn，commit_turn 时会写入 DB
+            err_id = f"error_{int(time.time() * 1000)}"
+            self.conv.current_turn[err_id] = AutoPMessage(
+                role="assistant",
+                content=[AutoPContentItem(type="input_text", text=error_text)],
+            )
+            if self._active_session_id == self.conv.session_id:
+                yield history + self.conv.page_response, ""
+            # 尝试提交已有内容（用户消息 + 错误提示）
+            if self._active_session_id == self.conv.session_id:
+                try:
+                    await self.conv.commit_turn()
+                except Exception as commit_err:
+                    logger.error(f"提交对话失败: {commit_err}")
         finally:
             self._processing = False
             self._cancel_event.clear()
+            self._active_session_id = None
 
     async def _process_query(
             self, message: str, history: List[Any]
     ) -> AsyncGenerator[list, Any]:
         tools_schema = await self._build_tools_schema()
         chat_stop = False
+
+        # 判断是否是新会话的第一条消息（用于自动标题）
+        is_first_message = len(self.conv.chat_history) == 0
 
         self.conv.add_user_message(message)
         response_view = self.conv.page_response
@@ -250,6 +368,11 @@ class AutoProcessAgent:
                                 '</div></details>'
                             )
                             container.metadata["status"] = "done"
+                        # 持久化思考内容到 current_turn，commit_turn 时会写入 chat_history 和 DB
+                        if thinking_text and thinking_eid:
+                            self.conv.current_turn[thinking_eid] = AutoPThinking(
+                                content=thinking_text,
+                            )
                         yield response_view
 
                     elif event.type == "response.output_text.done":
@@ -367,7 +490,13 @@ class AutoProcessAgent:
             if not pending_executions:
                 chat_stop = True
 
-        self.conv.commit_turn()
+        # 自动生成会话标题（新会话的首条消息）
+        if is_first_message and self.conv.session_id:
+            self.conv.auto_title(message)
+
+        # 只有会话未被切换时才 commit（否则数据已在 switch_session 中保存）
+        if self._active_session_id == self.conv.session_id:
+            await self.conv.commit_turn()
 
     # -- 工具执行 --
 

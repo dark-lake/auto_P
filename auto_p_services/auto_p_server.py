@@ -42,6 +42,18 @@ async def tool_search(tool_description: str) -> str:
 
 
 @mcp.tool(
+    name="get_time_now",
+    description="获取当前系统时间"
+)
+async def get_time_now() -> str:
+    """
+    获取当前系统时间
+    :return: 当前系统时间
+    """
+    pass
+
+
+@mcp.tool(
     name="get_tool_schema",
     description="根据工具名称检索并获取对应工具的完整 JSON Schema，且工具名称必须严格来源于轻量化工具列表, 一次性对多可以同时查询3个."
 )
